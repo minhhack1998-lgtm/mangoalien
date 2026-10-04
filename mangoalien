@@ -1,1 +1,2368 @@
+--[[
+=====================================================================
+  👽 ALIEN MANGO 🥭  V4
+  Tab:  MOVE • FARM • TP ITEM • TP ORE • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
+  - ESP, TP Item, TP Ore giờ là 3 tab riêng
+  - Sidebar có thanh chỉ báo, thanh trạng thái (FPS / Ping / số chức năng bật)
+  - Chỉnh cỡ GUI (SETTINGS), màu accent đổi được (có Rainbow)
+  - TẤT CẢ phím tắt đổi được: bấm vào ô [phím] rồi nhấn phím mới
+      Esc = huỷ  |  Backspace/Delete = bỏ phím
+  - Tự lưu config (nếu executor có writefile)
+  - Phím ẩn/hiện GUI mặc định: RightShift
+=====================================================================
+]]
 
+local cloneref = cloneref or function(o) return o end
+local function svc(n) return cloneref(game:GetService(n)) end
+
+local Players           = svc("Players")
+local UIS               = svc("UserInputService")
+local RunService        = svc("RunService")
+local TextChatService   = svc("TextChatService")
+local ReplicatedStorage = svc("ReplicatedStorage")
+local TweenService      = svc("TweenService")
+local Lighting          = svc("Lighting")
+local CoreGui           = svc("CoreGui")
+local HttpService       = svc("HttpService")
+local VirtualUser       = svc("VirtualUser")
+local VIM               = svc("VirtualInputManager")
+
+-- Gỡ bản cũ nếu chạy lại script (tránh GUI / phím bị nhân đôi)
+local genv = (getgenv and getgenv()) or _G
+if genv.AlienMango_Unload then pcall(genv.AlienMango_Unload) end
+
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- ================= CONNECTION TRACKER =================
+local conns = {}
+local function track(c) conns[#conns + 1] = c return c end
+
+-- ================= UTILS =================
+local function trim(s) return (tostring(s):gsub("^%s+", ""):gsub("%s+$", "")) end
+local function getChar() return LocalPlayer.Character end
+local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
+local function getRoot() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
+
+-- ================= CONFIG =================
+local FILE = "AlienMango_V4.json"
+local CanFS = (writefile and readfile and isfile) and true or false
+local PLACE = tostring(game.PlaceId)
+
+local Config = {
+	keys = {}, values = {}, options = {},
+	lists = {bring = {"Common Scrap"}, ore = {}},
+	points = {}, accent = 1, bringName = "Common Scrap", toolName = "",
+}
+
+if CanFS then
+	pcall(function()
+		-- đọc config V4, nếu chưa có thì thử đọc config V3 cũ
+		local f = isfile(FILE) and FILE or (isfile("AlienMango_V3.json") and "AlienMango_V3.json" or nil)
+		if f then
+			local data = HttpService:JSONDecode(readfile(f))
+			if type(data) == "table" then
+				for k, v in pairs(data) do Config[k] = v end
+			end
+		end
+	end)
+end
+for _, k in ipairs({"keys", "values", "options", "points"}) do
+	if type(Config[k]) ~= "table" then Config[k] = {} end
+end
+if type(Config.lists) ~= "table" then Config.lists = {} end
+if type(Config.lists.bring) ~= "table" then Config.lists.bring = {"Common Scrap"} end
+if type(Config.lists.ore) ~= "table" then Config.lists.ore = {} end
+if type(Config.points[PLACE]) ~= "table" then Config.points[PLACE] = {} end
+if type(Config.bringName) ~= "string" then Config.bringName = "Common Scrap" end
+if type(Config.toolName) ~= "string" then Config.toolName = "" end
+
+local function flushConfig()
+	if not CanFS then return end
+	pcall(function() writefile(FILE, HttpService:JSONEncode(Config)) end)
+end
+
+local saveTok = 0
+local function saveConfig()
+	if not CanFS then return end
+	saveTok = saveTok + 1
+	local t = saveTok
+	task.delay(0.7, function() if t == saveTok then flushConfig() end end)
+end
+
+local bringList, oreList, points = Config.lists.bring, Config.lists.ore, Config.points[PLACE]
+local bringName = Config.bringName
+local toolName = Config.toolName
+
+-- Giá trị số (slider)
+local D = {
+	flySpeed = 50, runSpeed = 40, digDelay = 0.1,
+	aimRange = 200, aimSmooth = 1, aimFov = 600,
+	mineRadius = 25, mineDelay = 0.2, bringInterval = 1, aimPartIdx = 1,
+	espRange = 150, espMax = 60, espMode = 1, espSize = 13,
+	kaRange = 15, kaDelay = 0.15, escapeHp = 40, uiScale = 1,
+}
+local S = {}
+for k, v in pairs(D) do
+	local sv = Config.values[k]
+	S[k] = (type(sv) == "number") and sv or v
+end
+
+-- ================= THEME =================
+local Accents = {
+	{"Pink",  Color3.fromRGB(255, 105, 180), Color3.fromRGB(150, 110, 255)},
+	{"Mango", Color3.fromRGB(255, 170, 60),  Color3.fromRGB(255, 95, 95)},
+	{"Ocean", Color3.fromRGB(70, 190, 255),  Color3.fromRGB(110, 110, 255)},
+	{"Mint",  Color3.fromRGB(80, 225, 150),  Color3.fromRGB(60, 180, 220)},
+	{"Blood", Color3.fromRGB(255, 70, 90),   Color3.fromRGB(170, 50, 120)},
+	{"Rainbow", Color3.fromRGB(255, 60, 60), Color3.fromRGB(170, 80, 255)},
+}
+local rainbowIdx = #Accents
+local accIdx = (type(Config.accent) == "number" and Accents[Config.accent]) and Config.accent or 1
+
+local Theme = {
+	Bg        = Color3.fromRGB(13, 13, 21),
+	Side      = Color3.fromRGB(19, 19, 30),
+	Header    = Color3.fromRGB(24, 24, 38),
+	Item      = Color3.fromRGB(30, 30, 46),
+	ItemHover = Color3.fromRGB(42, 42, 64),
+	Input     = Color3.fromRGB(12, 12, 20),
+	Line      = Color3.fromRGB(62, 62, 92),
+	Text      = Color3.fromRGB(238, 238, 250),
+	SubText   = Color3.fromRGB(135, 135, 168),
+	Off       = Color3.fromRGB(58, 58, 82),
+	Danger    = Color3.fromRGB(235, 80, 100),
+	Accent    = Accents[accIdx][2],
+	Accent2   = Accents[accIdx][3],
+}
+
+local accentProps, accentGrads, accentHooks = {}, {}, {}
+local function bindAccent(obj, prop, second)
+	accentProps[#accentProps + 1] = {obj, prop, second}
+	obj[prop] = second and Theme.Accent2 or Theme.Accent
+	return obj
+end
+local function bindGrad(g)
+	accentGrads[#accentGrads + 1] = g
+	g.Color = ColorSequence.new(Theme.Accent, Theme.Accent2)
+	return g
+end
+
+-- ================= UI HELPERS =================
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do o[k] = v end
+	if parent then o.Parent = parent end
+	return o
+end
+local function tween(obj, props, t)
+	TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+end
+local function corner(obj, r) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, obj) end
+local function stroke(obj, color, th, tr)
+	return new("UIStroke", {Color = color, Thickness = th or 1, Transparency = tr or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, obj)
+end
+local function hover(obj, normal, over, prop)
+	prop = prop or "BackgroundColor3"
+	obj.MouseEnter:Connect(function() tween(obj, {[prop] = over}) end)
+	obj.MouseLeave:Connect(function() tween(obj, {[prop] = normal}) end)
+end
+
+local orderOf = {}
+local function ord(page) orderOf[page] = (orderOf[page] or 0) + 1 return orderOf[page] end
+
+-- Thẻ (card) chuẩn cho mọi hàng
+local function card(parent, h, order)
+	local f = new("Frame", {Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = Theme.Item, BorderSizePixel = 0,
+		LayoutOrder = order}, parent)
+	corner(f, 9)
+	stroke(f, Theme.Line, 1, 0.7)
+	return f
+end
+
+-- Chức năng dùng chung giữa các tab (để ít biến local ở scope chính)
+local Fx = {}
+
+-- ================= WINDOW =================
+local W, H = 640, 430
+local HEAD, FOOT = 44, 30
+
+local ScreenGui = new("ScreenGui", {
+	Name = "AlienMangoV4", ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999,
+})
+if syn and syn.protect_gui then pcall(syn.protect_gui, ScreenGui) end
+pcall(function() ScreenGui.Parent = gethui and gethui() or CoreGui end)
+if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local Main = new("Frame", {
+	Name = "Main", Size = UDim2.new(0, W, 0, 0), Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2),
+	BackgroundColor3 = Theme.Bg, BorderSizePixel = 0, ClipsDescendants = true,
+}, ScreenGui)
+corner(Main, 14)
+local mainStroke = stroke(Main, Color3.new(1, 1, 1), 1.5, 0.3)
+local mainGrad = bindGrad(new("UIGradient", {Rotation = 45}, mainStroke))
+
+local Header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundColor3 = Theme.Header, BorderSizePixel = 0}, Main)
+-- đường gradient mảnh dưới header
+local headLine = new("Frame", {Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2),
+	BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, Header)
+bindGrad(new("UIGradient", {}, headLine))
+
+local Title = new("TextLabel", {
+	Size = UDim2.new(0, 150, 1, 0), Position = UDim2.new(0, 16, 0, 0), BackgroundTransparency = 1,
+	Text = "👽 Alien Mango 🥭", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+	TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+}, Header)
+local titleGrad = bindGrad(new("UIGradient", {}, Title))
+
+local pill = new("TextLabel", {Size = UDim2.new(0, 30, 0, 18), Position = UDim2.new(0, 172, 0.5, -9),
+	BackgroundColor3 = Color3.new(1, 1, 1), Text = "V4", TextColor3 = Color3.new(1, 1, 1),
+	Font = Enum.Font.GothamBold, TextSize = 11}, Header)
+corner(pill, 9)
+bindGrad(new("UIGradient", {}, pill))
+
+local function headerBtn(text, xOff, color)
+	local b = new("TextButton", {
+		Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, xOff, 0.5, -14), BackgroundColor3 = color,
+		BackgroundTransparency = 0.2, Text = text, TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamBold, TextSize = 13, AutoButtonColor = false,
+	}, Header)
+	corner(b, 8)
+	hover(b, 0.2, 0, "BackgroundTransparency")
+	return b
+end
+local CloseBtn = headerBtn("✕", -38, Theme.Danger)
+local MinBtn   = headerBtn("–", -72, Color3.fromRGB(90, 90, 130))
+
+-- Kéo cửa sổ
+do
+	local dragging, dragStart, startPos
+	Header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, input.Position, Main.Position
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+end
+
+local Side = new("Frame", {Position = UDim2.new(0, 8, 0, HEAD + 8), Size = UDim2.new(0, 136, 1, -(HEAD + FOOT + 16)),
+	BackgroundColor3 = Theme.Side, BorderSizePixel = 0}, Main)
+corner(Side, 10)
+stroke(Side, Theme.Line, 1, 0.75)
+new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, Side)
+new("UIPadding", {PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6)}, Side)
+
+local Content = new("Frame", {Position = UDim2.new(0, 152, 0, HEAD + 8), Size = UDim2.new(1, -160, 1, -(HEAD + FOOT + 16)),
+	BackgroundTransparency = 1, ClipsDescendants = true}, Main)
+
+-- Toast (thông báo nhỏ phía dưới)
+local Toast = new("TextLabel", {
+	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 76, 1, -FOOT - 8), Size = UDim2.new(0, 0, 0, 28),
+	AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Theme.Header, BackgroundTransparency = 1,
+	TextTransparency = 1, Text = "", TextColor3 = Theme.Text, Font = Enum.Font.GothamMedium,
+	TextSize = 12, ZIndex = 50,
+}, Main)
+corner(Toast, 14)
+local toastStroke = stroke(Toast, Theme.Accent, 1, 1)
+bindAccent(toastStroke, "Color")
+new("UIPadding", {PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16)}, Toast)
+local toastId = 0
+local function toast(msg)
+	toastId = toastId + 1
+	local id = toastId
+	Toast.Text = msg
+	tween(Toast, {BackgroundTransparency = 0.05, TextTransparency = 0}, 0.15)
+	tween(toastStroke, {Transparency = 0.3}, 0.15)
+	task.delay(2, function()
+		if id == toastId then
+			tween(Toast, {BackgroundTransparency = 1, TextTransparency = 1}, 0.25)
+			tween(toastStroke, {Transparency = 1}, 0.25)
+		end
+	end)
+end
+
+-- ================= TABS =================
+local pages, tabBtns, tabInd, tabOrder, activeTab = {}, {}, {}, 0, nil
+
+local function refreshTabs()
+	for n, btn in pairs(tabBtns) do
+		local on = (n == activeTab)
+		btn.BackgroundColor3 = Theme.Accent
+		tween(btn, {BackgroundTransparency = on and 0.78 or 1}, 0.15)
+		btn.TextColor3 = on and Color3.new(1, 1, 1) or Theme.SubText
+		tween(tabInd[n], {BackgroundTransparency = on and 0 or 1}, 0.15)
+	end
+end
+accentHooks[#accentHooks + 1] = refreshTabs
+
+local function switchTab(name)
+	local prev = activeTab
+	activeTab = name
+	for n, p in pairs(pages) do p.Visible = (n == name) end
+	if prev ~= name and pages[name] then
+		pages[name].Position = UDim2.new(0, 14, 0, 0)
+		tween(pages[name], {Position = UDim2.new(0, 0, 0, 0)}, 0.18)
+	end
+	refreshTabs()
+end
+
+local function tabSeparator(text)
+	new("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "  " .. text,
+		TextColor3 = Theme.Line, Font = Enum.Font.GothamBold, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = tabOrder * 10 + 5}, Side)
+end
+
+local function newTab(name, icon, label)
+	tabOrder = tabOrder + 1
+	local btn = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+		Text = "  " .. icon .. "  " .. label, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold,
+		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = tabOrder * 10,
+	}, Side)
+	corner(btn, 8)
+	local ind = new("Frame", {Size = UDim2.new(0, 3, 0, 16), Position = UDim2.new(0, 2, 0.5, -8),
+		BorderSizePixel = 0, BackgroundTransparency = 1}, btn)
+	corner(ind, 2)
+	bindAccent(ind, "BackgroundColor3")
+	btn.MouseEnter:Connect(function() if activeTab ~= name then tween(btn, {BackgroundTransparency = 0.9}, 0.12) end end)
+	btn.MouseLeave:Connect(function() if activeTab ~= name then tween(btn, {BackgroundTransparency = 1}, 0.12) end end)
+	btn.MouseButton1Click:Connect(function() switchTab(name) end)
+	tabBtns[name] = btn
+	tabInd[name] = ind
+
+	local page = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), Visible = false,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+	}, Content)
+	bindAccent(page, "ScrollBarImageColor3")
+	new("UIPadding", {PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 8)}, page)
+	new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, page)
+	pages[name] = page
+	return page
+end
+
+-- ================= KEYBIND SYSTEM =================
+local Binds, listening = {}, nil
+local KeyShort = {
+	LeftControl = "LCtrl", RightControl = "RCtrl", LeftShift = "LShift", RightShift = "RShift",
+	LeftAlt = "LAlt", RightAlt = "RAlt", Return = "Enter", Backquote = "`", Minus = "-", Equals = "=",
+	LeftBracket = "[", RightBracket = "]", Semicolon = ";", Quote = "'", Comma = ",", Period = ".",
+	Slash = "/", BackSlash = "\\", Insert = "Ins", Delete = "Del", PageUp = "PgUp", PageDown = "PgDn",
+	Zero = "0", One = "1", Two = "2", Three = "3", Four = "4", Five = "5", Six = "6", Seven = "7",
+	Eight = "8", Nine = "9",
+}
+
+local function getKey(id)
+	local k = Config.keys[id]
+	if k == nil then k = Binds[id].default end
+	if k == false then return nil end
+	return k
+end
+
+local function refreshKeyBtn(id)
+	local b = Binds[id]
+	if not b or not b.btn then return end
+	if listening == id then
+		b.btn.Text = "..."
+		b.btn.TextColor3 = Theme.Accent
+	else
+		local k = getKey(id)
+		b.btn.Text = k and (KeyShort[k] or k) or "—"
+		b.btn.TextColor3 = k and Theme.Text or Theme.SubText
+	end
+end
+accentHooks[#accentHooks + 1] = function() for id in pairs(Binds) do refreshKeyBtn(id) end end
+
+local function makeKeyBtn(parent, id)
+	local b = new("TextButton", {
+		Size = UDim2.new(0, 58, 0, 24), Position = UDim2.new(1, -64, 0.5, -12), BackgroundColor3 = Theme.Input,
+		Text = "", Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = false,
+	}, parent)
+	corner(b, 7)
+	bindAccent(stroke(b, Theme.Accent, 1, 0.55), "Color")
+	Binds[id].btn = b
+	b.MouseButton1Click:Connect(function()
+		local prev = listening
+		listening = (listening == id) and nil or id
+		if prev then refreshKeyBtn(prev) end
+		refreshKeyBtn(id)
+		if listening then toast("Nhấn phím mới  (Esc huỷ • Backspace = bỏ phím)") end
+	end)
+	refreshKeyBtn(id)
+	return b
+end
+
+-- ================= WIDGETS =================
+local State, Toggles, pendingInit = {}, {}, {}
+
+local function section(page, text)
+	local f = new("Frame", {Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = ord(page)}, page)
+	local bar = new("Frame", {Size = UDim2.new(0, 3, 0, 12), Position = UDim2.new(0, 2, 0.5, -6), BorderSizePixel = 0}, f)
+	corner(bar, 2)
+	bindAccent(bar, "BackgroundColor3")
+	new("TextLabel", {Size = UDim2.new(1, -14, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1,
+		Text = text, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold, TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, f)
+	return f
+end
+
+local function note(page, text, h)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, h or 30), BackgroundTransparency = 1, TextWrapped = true, LayoutOrder = ord(page),
+		Text = text, TextColor3 = Theme.SubText, Font = Enum.Font.Gotham, TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, page)
+end
+
+local function addToggle(page, id, label, cfg)
+	cfg = cfg or {}
+	local t = {id = id, persist = cfg.persist, opt = cfg.noKey}
+	Toggles[id] = t
+	State[id] = false
+	if cfg.persist then
+		local sv = Config.options[id]
+		if sv == nil then sv = cfg.default or false end
+		State[id] = sv and true or false
+	end
+
+	local row = card(page, 38, ord(page))
+	local trk = new("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(0, 10, 0.5, -10),
+		BackgroundColor3 = Theme.Off, BorderSizePixel = 0}, row)
+	corner(trk, 10)
+	t.trk = trk
+	local knob = new("Frame", {Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(0, 3, 0.5, -7),
+		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, trk)
+	corner(knob, 7)
+
+	local keyW = cfg.noKey and 0 or 68
+	local hit = new("TextButton", {
+		Size = UDim2.new(1, -(keyW + 6), 1, 0), BackgroundTransparency = 1, Text = label, TextColor3 = Theme.Text,
+		Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, AutoButtonColor = false,
+	}, row)
+	new("UIPadding", {PaddingLeft = UDim.new(0, 56)}, hit)
+	hover(row, Theme.Item, Theme.ItemHover)
+
+	local function refresh()
+		local on = State[id]
+		tween(trk, {BackgroundColor3 = on and Theme.Accent or Theme.Off}, 0.15)
+		tween(knob, {Position = on and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)}, 0.15)
+		hit.TextColor3 = on and Color3.new(1, 1, 1) or Theme.Text
+	end
+	t.refresh = refresh
+	accentHooks[#accentHooks + 1] = refresh
+
+	function t.set(v)
+		v = v and true or false
+		if State[id] == v then return end
+		State[id] = v
+		refresh()
+		if cfg.persist then Config.options[id] = v saveConfig() end
+		if cfg.fn then cfg.fn(v) end
+	end
+	function t.toggle() t.set(not State[id]) end
+	hit.MouseButton1Click:Connect(t.toggle)
+
+	if not cfg.noKey then
+		Binds[id] = {name = label, default = cfg.key, action = t.toggle}
+		makeKeyBtn(row, id)
+	end
+	refresh()
+	if cfg.persist and cfg.initCall and State[id] then pendingInit[#pendingInit + 1] = function() cfg.fn(true) end end
+	return t
+end
+
+local function addAction(page, id, label, defaultKey, fn)
+	local row = card(page, 38, ord(page))
+	local hit = new("TextButton", {
+		Size = UDim2.new(1, -74, 1, 0), BackgroundTransparency = 1, Text = "▶  " .. label, TextColor3 = Theme.Text,
+		Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, AutoButtonColor = false,
+	}, row)
+	new("UIPadding", {PaddingLeft = UDim.new(0, 12)}, hit)
+	hover(row, Theme.Item, Theme.ItemHover)
+	hit.MouseButton1Click:Connect(fn)
+	Binds[id] = {name = label, default = defaultKey, action = fn}
+	makeKeyBtn(row, id)
+	return row
+end
+
+local function addSlider(page, key, label, min, max, step, dec, onChange)
+	dec = dec or 0
+	local row = card(page, 48, ord(page))
+	new("TextLabel", {Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 12, 0, 5), BackgroundTransparency = 1,
+		Text = label, TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium, TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left}, row)
+	local box = new("TextBox", {Size = UDim2.new(0, 64, 0, 20), Position = UDim2.new(1, -76, 0, 5),
+		BackgroundColor3 = Theme.Input, Text = "", TextColor3 = Theme.Text, Font = Enum.Font.GothamBold,
+		TextSize = 12, ClearTextOnFocus = true}, row)
+	corner(box, 6)
+	local bar = new("Frame", {Position = UDim2.new(0, 12, 0, 35), Size = UDim2.new(1, -24, 0, 6),
+		BackgroundColor3 = Theme.Input, BorderSizePixel = 0}, row)
+	corner(bar, 3)
+	local fill = new("Frame", {Size = UDim2.new(0, 0, 1, 0), BorderSizePixel = 0}, bar)
+	bindAccent(fill, "BackgroundColor3")
+	corner(fill, 3)
+	local knob = new("Frame", {Size = UDim2.new(0, 13, 0, 13), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, bar)
+	corner(knob, 7)
+	bindAccent(stroke(knob, Theme.Accent, 2, 0), "Color")
+	local hit = new("TextButton", {Position = UDim2.new(0, 8, 0, 27), Size = UDim2.new(1, -16, 0, 20),
+		BackgroundTransparency = 1, Text = ""}, row)
+
+	local function setV(v, nosave)
+		v = math.clamp(math.floor(v / step + 0.5) * step, min, max)
+		v = tonumber(string.format("%." .. dec .. "f", v))
+		S[key] = v
+		local rel = (v - min) / (max - min)
+		fill.Size = UDim2.new(rel, 0, 1, 0)
+		knob.Position = UDim2.new(rel, -6, 0.5, -6)
+		box.Text = tostring(v)
+		if not nosave then Config.values[key] = v saveConfig() end
+		if onChange then pcall(onChange, v) end
+	end
+	setV(S[key], true)
+
+	local dragging = false
+	local function fromX(x)
+		local rel = math.clamp((x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+		setV(min + (max - min) * rel)
+	end
+	hit.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			fromX(i.Position.X)
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			fromX(i.Position.X)
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end))
+	box.FocusLost:Connect(function()
+		local n = tonumber(box.Text)
+		if n then setV(n) else box.Text = tostring(S[key]) end
+	end)
+end
+
+local function addCycle(page, key, label, options)
+	local row = card(page, 36, ord(page))
+	new("TextLabel", {Size = UDim2.new(0.4, 0, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1,
+		Text = label, TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium, TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left}, row)
+	local b = new("TextButton", {Size = UDim2.new(0.55, -8, 0, 26), Position = UDim2.new(0.45, 0, 0.5, -13),
+		BackgroundColor3 = Theme.Input, TextColor3 = Theme.Text, Font = Enum.Font.GothamBold, TextSize = 11,
+		AutoButtonColor = false, Text = ""}, row)
+	corner(b, 7)
+	bindAccent(stroke(b, Theme.Accent, 1, 0.6), "Color")
+	local function show() b.Text = "‹  " .. (options[S[key]] or options[1]) .. "  ›" end
+	show()
+	b.MouseButton1Click:Connect(function()
+		S[key] = (S[key] % #options) + 1
+		Config.values[key] = S[key]
+		saveConfig()
+		show()
+	end)
+end
+
+local function addTextRow(page, placeholder, default, btnTexts)
+	local row = card(page, 38, ord(page))
+	local nb = #btnTexts
+	local box = new("TextBox", {
+		Size = UDim2.new(1, -(nb * 70 + 10), 0, 28), Position = UDim2.new(0, 5, 0.5, -14), BackgroundColor3 = Theme.Input,
+		PlaceholderText = placeholder, PlaceholderColor3 = Theme.SubText, Text = default or "", TextColor3 = Theme.Text,
+		Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+	corner(box, 7)
+	new("UIPadding", {PaddingLeft = UDim.new(0, 10)}, box)
+	local st = stroke(box, Theme.Accent, 1, 1)
+	bindAccent(st, "Color")
+	box.Focused:Connect(function() tween(st, {Transparency = 0.2}) end)
+	box.FocusLost:Connect(function() tween(st, {Transparency = 1}) end)
+
+	local btns = {}
+	for i, text in ipairs(btnTexts) do
+		local b = new("TextButton", {
+			Size = UDim2.new(0, 66, 0, 28), Position = UDim2.new(1, -(nb - i + 1) * 70, 0.5, -14),
+			BackgroundColor3 = Color3.new(1, 1, 1), Text = text, TextColor3 = Color3.new(1, 1, 1),
+			Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = false,
+		}, row)
+		corner(b, 7)
+		bindGrad(new("UIGradient", {}, b))
+		b.MouseEnter:Connect(function() tween(b, {BackgroundTransparency = 0.15}) end)
+		b.MouseLeave:Connect(function() tween(b, {BackgroundTransparency = 0}) end)
+		btns[i] = b
+	end
+	return box, btns
+end
+
+local function makeList(page)
+	local list = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, LayoutOrder = ord(page)}, page)
+	new("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, list)
+	return list
+end
+local function clearList(list)
+	for _, c in ipairs(list:GetChildren()) do if not c:IsA("UIListLayout") then c:Destroy() end end
+end
+local function emptyLabel(list, text)
+	new("TextLabel", {Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Text = text,
+		TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium, TextSize = 11}, list)
+end
+
+local function addListRow(list, order, text, onPick, actions, onDelete)
+	local n = #actions
+	local rightPad = onDelete and 36 or 6
+	local row = card(list, 32, order)
+	local pick = new("TextButton", {
+		Size = UDim2.new(1, -(n * 42 + rightPad), 1, 0), BackgroundTransparency = 1, Text = "▸ " .. text,
+		TextColor3 = Theme.Text, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, AutoButtonColor = false,
+	}, row)
+	new("UIPadding", {PaddingLeft = UDim.new(0, 10)}, pick)
+	hover(row, Theme.Item, Theme.ItemHover)
+	pick.MouseButton1Click:Connect(onPick)
+
+	for j, act in ipairs(actions) do
+		local b = new("TextButton", {
+			Size = UDim2.new(0, 40, 0, 22), Position = UDim2.new(1, -(rightPad - 4 + (n - j + 1) * 42), 0.5, -11),
+			BackgroundTransparency = 0.2, Text = act.text, TextColor3 = Color3.new(1, 1, 1),
+			Font = Enum.Font.GothamBold, TextSize = 9, AutoButtonColor = false,
+		}, row)
+		bindAccent(b, "BackgroundColor3", true)
+		corner(b, 6)
+		hover(b, 0.2, 0, "BackgroundTransparency")
+		b.MouseButton1Click:Connect(act.fn)
+	end
+	if onDelete then
+	local del = new("TextButton", {
+		Size = UDim2.new(0, 26, 0, 22), Position = UDim2.new(1, -30, 0.5, -11), BackgroundColor3 = Theme.Danger,
+		BackgroundTransparency = 0.3, Text = "✕", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+		TextSize = 11, AutoButtonColor = false,
+	}, row)
+	corner(del, 6)
+	hover(del, 0.3, 0, "BackgroundTransparency")
+	del.MouseButton1Click:Connect(onDelete)
+	end
+end
+
+local function addNameList(page, placeholder, store, onPick, actions)
+	local box, btns = addTextRow(page, placeholder, "", {"+ ADD"})
+	local list = makeList(page)
+	local render
+	local function add()
+		local name = trim(box.Text)
+		if name == "" then return end
+		for _, n in ipairs(store) do
+			if n:lower() == name:lower() then box.Text = "" return end
+		end
+		table.insert(store, name)
+		box.Text = ""
+		saveConfig()
+		render()
+	end
+	render = function()
+		clearList(list)
+		if #store == 0 then emptyLabel(list, "List trống") return end
+		for i, name in ipairs(store) do
+			local acts = {}
+			for _, a in ipairs(actions) do
+				acts[#acts + 1] = {text = a.text, fn = function() a.fn(name) end}
+			end
+			addListRow(list, i, name, function() onPick(name) end, acts, function()
+				table.remove(store, i)
+				saveConfig()
+				render()
+			end)
+		end
+	end
+	btns[1].MouseButton1Click:Connect(add)
+	box.FocusLost:Connect(function(enter) if enter then add() end end)
+	render()
+	return render
+end
+
+-- =========================================================
+-- LOGIC
+-- =========================================================
+local Loops = {}
+local function startLoop(id, body, getDelay)
+	local token = {}
+	Loops[id] = token
+	task.spawn(function()
+		while Loops[id] == token do
+			local ok, err = pcall(body)
+			if not ok then warn("[AlienMango] " .. id .. ": " .. tostring(err)) end
+			task.wait(getDelay())
+		end
+	end)
+end
+local function stopLoop(id) Loops[id] = nil end
+
+-- ---------- Teleport helpers ----------
+local prevCF
+local function teleportToCFrame(cf)
+	local root = getRoot()
+	if root then
+		prevCF = root.CFrame
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.CFrame = cf
+	end
+end
+
+local function teleportToMouse()
+	if Mouse.Hit then teleportToCFrame(CFrame.new(Mouse.Hit.Position + Vector3.new(0, 3, 0))) end
+end
+
+-- ---------- Fly ----------
+local flyBV, flyBG, flyConn, flyHum
+local function stopFly()
+	if flyConn then flyConn:Disconnect() flyConn = nil end
+	if flyBV then flyBV:Destroy() flyBV = nil end
+	if flyBG then flyBG:Destroy() flyBG = nil end
+	if flyHum and flyHum.Parent and not State.ragdoll then flyHum.PlatformStand = false end
+	flyHum = nil
+end
+local function startFly()
+	local root, hum = getRoot(), getHum()
+	if not root or not hum then toast("Không tìm thấy nhân vật") Toggles.fly.set(false) return end
+	stopFly()
+	flyHum = hum
+	flyBV = new("BodyVelocity", {MaxForce = Vector3.new(1e9, 1e9, 1e9), Velocity = Vector3.zero}, root)
+	flyBG = new("BodyGyro", {MaxTorque = Vector3.new(1e9, 1e9, 1e9), P = 1e4, CFrame = root.CFrame}, root)
+	hum.PlatformStand = true
+	flyConn = RunService.RenderStepped:Connect(function()
+		local r = getRoot()
+		if not r or not flyBV or flyBV.Parent ~= r then Toggles.fly.set(false) return end
+		local cam = workspace.CurrentCamera
+		local d = Vector3.zero
+		if not UIS:GetFocusedTextBox() then
+			if UIS:IsKeyDown(Enum.KeyCode.W) then d += cam.CFrame.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.S) then d -= cam.CFrame.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.A) then d -= cam.CFrame.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.D) then d += cam.CFrame.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.Space) then d += Vector3.yAxis end
+			if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
+		end
+		if d.Magnitude == 0 and hum.MoveDirection.Magnitude > 0 then d = hum.MoveDirection end -- mobile
+		if d.Magnitude > 0 then d = d.Unit end
+		flyBV.Velocity = d * S.flySpeed
+		flyBG.CFrame = cam.CFrame
+	end)
+end
+
+-- ---------- Noclip ----------
+local noclipConn, noclipTouched = nil, {}
+local function stopNoclip()
+	if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+	for part in pairs(noclipTouched) do
+		if part.Parent then part.CanCollide = true end
+	end
+	noclipTouched = {}
+end
+local function startNoclip()
+	stopNoclip()
+	noclipConn = RunService.Stepped:Connect(function()
+		local c = getChar()
+		if not c then return end
+		for _, p in ipairs(c:GetDescendants()) do
+			if p:IsA("BasePart") and p.CanCollide then
+				noclipTouched[p] = true
+				p.CanCollide = false
+			end
+		end
+	end)
+end
+
+-- ---------- Inf jump ----------
+local infJumpConn
+local function stopInfJump() if infJumpConn then infJumpConn:Disconnect() infJumpConn = nil end end
+local function startInfJump()
+	stopInfJump()
+	infJumpConn = UIS.JumpRequest:Connect(function()
+		local h = getHum()
+		if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end)
+end
+
+-- ---------- Run ----------
+local runConn, defaultWalk = nil, 16
+local function stopRun()
+	if runConn then runConn:Disconnect() runConn = nil end
+	local h = getHum()
+	if h then h.WalkSpeed = defaultWalk end
+end
+local function startRun()
+	local h = getHum()
+	if h then defaultWalk = h.WalkSpeed end
+	if runConn then runConn:Disconnect() end
+	runConn = RunService.Heartbeat:Connect(function()
+		local hh = getHum()
+		if hh and hh.WalkSpeed ~= S.runSpeed then hh.WalkSpeed = S.runSpeed end
+	end)
+end
+
+-- ---------- Ragdoll ----------
+local ragConn
+local function stopRagdoll()
+	if ragConn then ragConn:Disconnect() ragConn = nil end
+	local h = getHum()
+	if h then
+		h.RequiresNeck = true
+		h:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+end
+local function startRagdoll()
+	local h = getHum()
+	if not h then Toggles.ragdoll.set(false) return end
+	h.RequiresNeck = false
+	h:ChangeState(Enum.HumanoidStateType.Physics)
+	if ragConn then ragConn:Disconnect() end
+	ragConn = RunService.Heartbeat:Connect(function()
+		local hh = getHum()
+		if hh and hh:GetState() ~= Enum.HumanoidStateType.Physics then hh:ChangeState(Enum.HumanoidStateType.Physics) end
+	end)
+end
+
+-- ---------- Fullbright ----------
+local fbConn, lightBackup
+local function stopFullbright()
+	if fbConn then fbConn:Disconnect() fbConn = nil end
+	if lightBackup then
+		for prop, v in pairs(lightBackup) do pcall(function() Lighting[prop] = v end) end
+		lightBackup = nil
+	end
+end
+local function startFullbright()
+	if not lightBackup then
+		lightBackup = {
+			Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, FogEnd = Lighting.FogEnd,
+			GlobalShadows = Lighting.GlobalShadows, Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+		}
+	end
+	if fbConn then fbConn:Disconnect() end
+	fbConn = RunService.RenderStepped:Connect(function()
+		Lighting.Brightness = 2
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 1e6
+		Lighting.GlobalShadows = false
+		Lighting.Ambient = Color3.fromRGB(190, 190, 190)
+		Lighting.OutdoorAmbient = Color3.fromRGB(190, 190, 190)
+	end)
+end
+
+-- ---------- Anti AFK ----------
+local afkConn
+local function setAntiAFK(on)
+	if afkConn then afkConn:Disconnect() afkConn = nil end
+	if on then
+		afkConn = LocalPlayer.Idled:Connect(function()
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new())
+			end)
+		end)
+	end
+end
+
+-- ---------- Auto dig ----------
+local function equipTool()
+	local char, hum = getChar(), getHum()
+	if not char or not hum then return nil end
+	local want = toolName:lower()
+	local function ok(t) return want == "" or t.Name:lower():find(want, 1, true) ~= nil end
+	local tool = char:FindFirstChildOfClass("Tool")
+	if tool and ok(tool) then return tool end
+	local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+	if bp then
+		for _, t in ipairs(bp:GetChildren()) do
+			if t:IsA("Tool") and ok(t) then hum:EquipTool(t) return t end
+		end
+	end
+	return tool
+end
+
+local function digOnce()
+	local tool = equipTool()
+	if not tool then return end
+	pcall(function() tool:Activate() end)
+	if State.digMouse then
+		pcall(function()
+			local cam = workspace.CurrentCamera
+			local x, y = cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2
+			VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+			task.wait()
+			VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+		end)
+	end
+end
+
+-- ---------- Auto aim ----------
+local AimParts = {"Head", "HumanoidRootPart"}
+local npcList, npcConn, aimConn = {}, nil, nil
+local function addNPC(h)
+	if h:IsA("Humanoid") then
+		local m = h.Parent
+		if m and m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then npcList[h] = true end
+	end
+end
+local function visibleTo(origin, part, model)
+	local rp = RaycastParams.new()
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	rp.FilterDescendantsInstances = {getChar()}
+	rp.IgnoreWater = true
+	local res = workspace:Raycast(origin, part.Position - origin, rp)
+	return (not res) or res.Instance:IsDescendantOf(model)
+end
+local function stopAim()
+	if aimConn then aimConn:Disconnect() aimConn = nil end
+	if npcConn then npcConn:Disconnect() npcConn = nil end
+	npcList = {}
+end
+local function startAim()
+	stopAim()
+	for _, d in ipairs(workspace:GetDescendants()) do addNPC(d) end
+	npcConn = workspace.DescendantAdded:Connect(addNPC)
+	aimConn = RunService.RenderStepped:Connect(function()
+		local cam, root = workspace.CurrentCamera, getRoot()
+		if not cam or not root then return end
+		local center = cam.ViewportSize / 2
+		local me = getChar()
+		local pname = AimParts[S.aimPartIdx] or "Head"
+		local best, bestScore
+		for h in pairs(npcList) do
+			local m = h.Parent
+			if not m then
+				npcList[h] = nil
+			elseif h.Health > 0 and m ~= me then
+				local part = m:FindFirstChild(pname) or m:FindFirstChild("HumanoidRootPart")
+				if part and (part.Position - root.Position).Magnitude <= S.aimRange then
+					local p, on = cam:WorldToViewportPoint(part.Position)
+					if on then
+						local score = (Vector2.new(p.X, p.Y) - center).Magnitude
+						if score <= S.aimFov and (not best or score < bestScore)
+							and (not State.aimWall or visibleTo(cam.CFrame.Position, part, m)) then
+							best, bestScore = part, score
+						end
+					end
+				end
+			end
+		end
+		if best then
+			local goal = CFrame.new(cam.CFrame.Position, best.Position)
+			cam.CFrame = (S.aimSmooth >= 1) and goal or cam.CFrame:Lerp(goal, S.aimSmooth)
+		end
+	end)
+end
+
+-- ---------- Tìm item / ore ----------
+local function resolveTarget(inst)
+	if inst and (inst:IsA("Model") or inst:IsA("BasePart") or inst:IsA("Tool")) then return inst end
+	return nil
+end
+
+local function getPos(inst)
+	if inst:IsA("Model") then return inst:GetPivot().Position end
+	if inst:IsA("Tool") then
+		local h = inst:FindFirstChild("Handle")
+		return h and h.Position
+	end
+	return inst.Position
+end
+
+local function findItems(name, partial)
+	local wanted = name:lower()
+	local char = getChar()
+	local playerChars = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then playerChars[#playerChars + 1] = p.Character end
+	end
+
+	local function match(v)
+		if v == nil then return false end
+		local s = tostring(v):lower()
+		if partial then return s:find(wanted, 1, true) ~= nil end
+		return s == wanted
+	end
+
+	local found = {}
+	local function add(inst)
+		if not inst or inst == workspace then return end
+		if char and inst:IsDescendantOf(char) then return end
+		for _, c in ipairs(playerChars) do
+			if inst == c or inst:IsDescendantOf(c) then return end
+		end
+		if inst:IsA("Model") and #inst:GetDescendants() > 300 then return end
+		found[inst] = true
+	end
+
+	local deep = State.deepSearch
+	local desc = workspace:GetDescendants()
+	for i, d in ipairs(desc) do
+		if i % 4000 == 0 then RunService.Heartbeat:Wait() end -- tránh đơ game
+		if match(d.Name) then add(resolveTarget(d)) end
+		if deep then
+			if d:IsA("ValueBase") then
+				local okv, v = pcall(function() return d.Value end)
+				if okv and match(v) then add(resolveTarget(d.Parent)) end
+			elseif d:IsA("TextLabel") or d:IsA("TextButton") then
+				if match(d.Text) then
+					add(d:FindFirstAncestorOfClass("Tool") or d:FindFirstAncestorOfClass("Model")
+						or d:FindFirstAncestorWhichIsA("BasePart"))
+				end
+			elseif d:IsA("Model") or d:IsA("BasePart") or d:IsA("Tool") then
+				for _, val in pairs(d:GetAttributes()) do
+					if match(val) then add(d) break end
+				end
+			end
+		end
+	end
+
+	local list = {}
+	for inst in pairs(found) do
+		local nested, anc = false, inst.Parent
+		while anc and anc ~= workspace do
+			if found[anc] then nested = true break end
+			anc = anc.Parent
+		end
+		if not nested then list[#list + 1] = inst end
+	end
+	return list
+end
+
+local function searchItems(name)
+	local list = findItems(name, false)
+	if #list == 0 and #name >= 2 then list = findItems(name, true) end
+	return list
+end
+
+
+-- ---------- Tìm ORE (chỉ ore: khớp ĐÚNG tên, bỏ Tool / nhân vật / NPC) ----------
+local function findOre(name, partial)
+	local wanted = trim(name):lower()
+	if wanted == "" then return {} end
+	local playerChars = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then playerChars[#playerChars + 1] = p.Character end
+	end
+	local found = {}
+	for i, d in ipairs(workspace:GetDescendants()) do
+		if i % 4000 == 0 then RunService.Heartbeat:Wait() end
+		local dn = (d:IsA("Model") or d:IsA("BasePart")) and d.Name:lower()
+		if dn and (dn == wanted or (partial and dn:find(wanted, 1, true))) then
+			local bad = d:FindFirstAncestorOfClass("Tool") ~= nil
+				or (d:IsA("Model") and d:FindFirstChildOfClass("Humanoid") ~= nil)
+			if not bad then
+				for _, c in ipairs(playerChars) do
+					if d == c or d:IsDescendantOf(c) then bad = true break end
+				end
+			end
+			if not bad then
+				local a = d.Parent
+				while a and a ~= workspace do
+					if a:FindFirstChildOfClass("Humanoid") then bad = true break end
+					a = a.Parent
+				end
+			end
+			if not bad then found[d] = true end
+		end
+	end
+	local list = {}
+	for inst in pairs(found) do
+		local nested, anc = false, inst.Parent
+		while anc and anc ~= workspace do
+			if found[anc] then nested = true break end
+			anc = anc.Parent
+		end
+		if not nested then list[#list + 1] = inst end
+	end
+	return list
+end
+
+local function tpToOre(name)
+	local root = getRoot()
+	if not root then return end
+	local list = findOre(name)
+	local approx = false
+	if #list == 0 then list = findOre(name, true) approx = #list > 0 end
+	root = getRoot()
+	if not root then return end
+	local best, bestD, nearest, nearestD
+	for _, inst in ipairs(list) do
+		local okp, pos = pcall(getPos, inst)
+		if okp and pos then
+			local d = (pos - root.Position).Magnitude
+			if not nearestD or d < nearestD then nearest, nearestD = pos, d end
+			if d > 6 and (not bestD or d < bestD) then best, bestD = pos, d end
+		end
+	end
+	local dest = best or nearest
+	if dest then
+		teleportToCFrame(CFrame.new(dest + Vector3.new(0, 4, 0)))
+		toast("TP ore: " .. name .. "  (" .. #list .. ")" .. (approx and " ~gần đúng" or ""))
+	else
+		toast("Không thấy ore: " .. name .. " (gõ đúng tên)")
+	end
+end
+
+-- TP tới ore gần nhất trong cả list ORE
+function Fx.tpNearestOre()
+	if #oreList == 0 then toast("List ORE trống") return end
+	local bestPos, bestD
+	for _, n in ipairs(oreList) do
+		local ores = findOre(n)
+		if #ores == 0 then ores = findOre(n, true) end
+		local root = getRoot()
+		if not root then return end
+		for _, inst in ipairs(ores) do
+			local okp, pos = pcall(getPos, inst)
+			if okp and pos then
+				local d = (pos - root.Position).Magnitude
+				if d > 6 and (not bestD or d < bestD) then bestPos, bestD = pos, d end
+			end
+		end
+	end
+	if bestPos then
+		teleportToCFrame(CFrame.new(bestPos + Vector3.new(0, 4, 0)))
+		toast("TP ore gần nhất (" .. math.floor(bestD) .. " m)")
+	else
+		toast("Không thấy ore nào trong list")
+	end
+end
+
+-- ---------- Quét tên ore / item ----------
+local IgnoreNames = {
+	Part = true, Baseplate = true, Terrain = true, Handle = true, SpawnLocation = true, Camera = true,
+	HumanoidRootPart = true, Head = true, Torso = true, UpperTorso = true, LowerTorso = true, Model = true,
+	Folder = true, Wedge = true, MeshPart = true, Union = true, Workspace = true,
+}
+local function addUnique(store, name)
+	for _, n in ipairs(store) do
+		if n:lower() == name:lower() then return false end
+	end
+	table.insert(store, name)
+	saveConfig()
+	return true
+end
+
+-- Thêm tên vật đang trỏ chuột vào một list (ORE hoặc ITEM)
+function Fx.pickUnderMouse(store, render)
+	local t = Mouse.Target
+	if not t then toast("Không có vật nào dưới con trỏ") return end
+	local n = t.Name
+	if IgnoreNames[n] then
+		local m = t:FindFirstAncestorOfClass("Model")
+		if m and not Players:GetPlayerFromCharacter(m) then n = m.Name end
+	end
+	if IgnoreNames[n] then toast("Tên quá chung chung: " .. n) return end
+	toast(addUnique(store, n) and ("Đã thêm: " .. n) or ("Đã có trong list: " .. n))
+	if render then render() end
+end
+
+-- ---------- Bring / TP item ----------
+local bringBusy = false
+local function bringItems(name, silent)
+	name = name or bringName
+	local root = getRoot()
+	if not root or bringBusy then return 0 end
+	bringBusy = true
+	local okS, list = pcall(searchItems, name)
+	bringBusy = false
+	if not okS then return 0 end
+
+	root = getRoot()
+	if not root then return 0 end
+	local count = 0
+	for _, inst in ipairs(list) do
+		if inst.Parent then
+			local offset = CFrame.new((count % 5 - 2) * 3, 0, -5 - math.floor(count / 5) * 3)
+			local target = root.CFrame * offset
+			local ok = pcall(function()
+				if inst:IsA("Model") then
+					inst:PivotTo(target)
+				elseif inst:IsA("Tool") then
+					local h = inst:FindFirstChild("Handle")
+					if h then h.AssemblyLinearVelocity = Vector3.zero h.CFrame = target end
+				else
+					inst.AssemblyLinearVelocity = Vector3.zero
+					inst.CFrame = target
+				end
+			end)
+			if ok then count = count + 1 end
+		end
+	end
+	if not silent then
+		toast(count > 0 and ("Bring " .. count .. ": " .. name) or ("Không thấy: " .. name))
+	end
+	return count
+end
+
+local function tpToItem(name)
+	name = name or bringName
+	local root = getRoot()
+	if not root then return end
+	local list = searchItems(name)
+	root = getRoot()
+	if not root then return end
+	local best, bestD, nearest, nearestD
+	for _, inst in ipairs(list) do
+		local pos = getPos(inst)
+		if pos then
+			local d = (pos - root.Position).Magnitude
+			if not nearestD or d < nearestD then nearest, nearestD = pos, d end
+			if d > 6 and (not bestD or d < bestD) then best, bestD = pos, d end
+		end
+	end
+	local dest = best or nearest
+	if dest then
+		teleportToCFrame(CFrame.new(dest + Vector3.new(0, 4, 0)))
+		toast("TP: " .. name .. "  (" .. #list .. ")")
+	else
+		toast("Không thấy: " .. name)
+	end
+end
+
+-- TP tới item gần nhất trong cả list ITEM
+function Fx.tpNearestItem()
+	if #bringList == 0 then toast("List ITEM trống") return end
+	local bestPos, bestD
+	for _, n in ipairs(bringList) do
+		local okS, items = pcall(searchItems, n)
+		local root = getRoot()
+		if not root then return end
+		if okS then
+			for _, inst in ipairs(items) do
+				local okp, pos = pcall(getPos, inst)
+				if okp and pos then
+					local d = (pos - root.Position).Magnitude
+					if d > 6 and (not bestD or d < bestD) then bestPos, bestD = pos, d end
+				end
+			end
+		end
+	end
+	if bestPos then
+		teleportToCFrame(CFrame.new(bestPos + Vector3.new(0, 4, 0)))
+		toast("TP item gần nhất (" .. math.floor(bestD) .. " m)")
+	else
+		toast("Không thấy item nào trong list")
+	end
+end
+
+-- ---------- Auto mine ----------
+local mineTargets, mineScan = {}, 0
+local function rescanOre()
+	local res = {}
+	for _, n in ipairs(oreList) do
+		local ores = findOre(n)
+		if #ores == 0 then ores = findOre(n, true) end
+		for _, inst in ipairs(ores) do
+			if getPos(inst) then res[#res + 1] = inst end
+		end
+	end
+	mineTargets = res
+	mineScan = os.clock()
+end
+local function nearestOre()
+	local root = getRoot()
+	if not root then return nil end
+	if os.clock() - mineScan > 1.5 then rescanOre() end
+	local bp, bd
+	for _, inst in ipairs(mineTargets) do
+		if inst.Parent then
+			local p = getPos(inst)
+			if p then
+				local d = (p - root.Position).Magnitude
+				if not bd or d < bd then bp, bd = p, d end
+			end
+		end
+	end
+	return bp, bd
+end
+local function mineStep()
+	if #oreList == 0 then digOnce() return end
+	local pos, d = nearestOre()
+	if not pos then return end
+	if d <= S.mineRadius then
+		local cam = workspace.CurrentCamera
+		if cam then cam.CFrame = CFrame.new(cam.CFrame.Position, pos) end
+		digOnce()
+	elseif State.mineTP then
+		teleportToCFrame(CFrame.new(pos + Vector3.new(0, 4, 0)))
+	end
+end
+
+-- ---------- ESP tên item / ore (nhãn gọn, không chồng nhau, có số mét) ----------
+local ESP = {gui = nil, map = {}, items = {}, rconn = nil, on = false, filter = ""}
+do
+	local SkipESP = {Terrain = true, Baseplate = true, SpawnLocation = true, Camera = true}
+
+	local function inPlayer(inst)
+		for _, p in ipairs(Players:GetPlayers()) do
+			local c = p.Character
+			if c and (inst == c or inst:IsDescendantOf(c)) then return true end
+		end
+		return false
+	end
+	local function underHumanoid(inst)
+		local a = inst.Parent
+		while a and a ~= workspace do
+			if a:FindFirstChildOfClass("Humanoid") then return true end
+			a = a.Parent
+		end
+		return false
+	end
+	local function cand(d)
+		if d:IsA("Tool") then return d end
+		if not d:IsA("BasePart") or underHumanoid(d) then return nil end
+		local tool = d:FindFirstAncestorOfClass("Tool")
+		if tool then return tool end
+		local m = d:FindFirstAncestorOfClass("Model")
+		if m and #m:GetDescendants() <= 300 then return m end
+		return d
+	end
+	local function adornee(inst)
+		if inst:IsA("Model") then return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true) end
+		if inst:IsA("Tool") then return inst:FindFirstChild("Handle") or inst:FindFirstChildWhichIsA("BasePart", true) end
+		return inst
+	end
+	local function esc(t) return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+
+	-- Tên có nằm trong list (ORE / ITEM) không
+	local function inList(store, n)
+		local l = n:lower()
+		for _, s in ipairs(store) do
+			local w = s:lower()
+			if l == w or l:find(w, 1, true) then return true end
+		end
+		return false
+	end
+
+	local function makeLabel()
+		local l = Instance.new("TextLabel")
+		l.AnchorPoint = Vector2.new(0.5, 1)
+		l.AutomaticSize = Enum.AutomaticSize.XY
+		l.Size = UDim2.new(0, 0, 0, 0)
+		l.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
+		l.BackgroundTransparency = 0.2
+		l.BorderSizePixel = 0
+		l.RichText = true
+		l.Font = Enum.Font.GothamMedium
+		l.TextSize = S.espSize
+		l.TextColor3 = Color3.new(1, 1, 1)
+		l.TextXAlignment = Enum.TextXAlignment.Center
+		l.Visible = false
+		l.Text = ""
+		local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, 6) c.Parent = l
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
+		pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 3), UDim.new(0, 3)
+		pad.Parent = l
+		local st = Instance.new("UIStroke")
+		st.Color, st.Thickness, st.Transparency = Color3.fromRGB(255, 226, 110), 1, 0.35
+		st.Parent = l
+		l.Parent = ESP.gui
+		return l
+	end
+
+	local function fmt(it, d)
+		local col = d < 30 and "#7CFC9A" or (d < 100 and "#8FE3FF" or "#C9CCE0")
+		local nm = esc(it.name)
+		if it.count > 1 then nm = nm .. "  ×" .. it.count end
+		local sub = (it.parent and (esc(it.parent) .. "  ·  ") or "") .. d .. " m"
+		return '<font color="#FFE27A"><b>' .. nm .. '</b></font>\n<font color="' .. col .. '" size="' .. math.max(S.espSize - 1, 8) .. '"><b>' .. sub .. '</b></font>'
+	end
+
+	function ESP.clear()
+		if ESP.rconn then ESP.rconn:Disconnect() ESP.rconn = nil end
+		if ESP.gui then pcall(function() ESP.gui:Destroy() end) end
+		ESP.gui, ESP.map, ESP.items = nil, {}, {}
+	end
+
+	function ESP.refresh()
+		local root = getRoot()
+		if not root or not ESP.on then return end
+		local filter = trim(ESP.filter):lower()
+		local mode = S.espMode
+		local seen, list = {}, {}
+		for i, d in ipairs(workspace:GetDescendants()) do
+			if i % 3000 == 0 then
+				RunService.Heartbeat:Wait()
+				if not ESP.on then return end
+			end
+			if d:IsA("BasePart") or d:IsA("Tool") then
+				local c = cand(d)
+				if c and not seen[c] then
+					seen[c] = true
+					local n = c.Name
+					local pass = not SkipESP[n] and (filter == "" or n:lower():find(filter, 1, true))
+					if pass and mode == 2 then pass = inList(oreList, n) end
+					if pass and mode == 3 then pass = inList(bringList, n) end
+					if pass and not inPlayer(c) then
+						local okp, pos = pcall(getPos, c)
+						if okp and pos then
+							local dist = (pos - root.Position).Magnitude
+							if dist <= S.espRange then list[#list + 1] = {inst = c, pos = pos, dist = dist} end
+						end
+					end
+				end
+			end
+		end
+		if not ESP.on then return end
+		table.sort(list, function(a, b) return a.dist < b.dist end)
+
+		-- Gộp các vật cùng tên nằm sát nhau thành 1 nhãn "Tên ×N"
+		local clusters = {}
+		for _, e in ipairs(list) do
+			local n, merged = e.inst.Name, false
+			for _, c in ipairs(clusters) do
+				if c.name == n and (c.pos - e.pos).Magnitude <= 6 then
+					c.count = c.count + 1
+					merged = true
+					break
+				end
+			end
+			if not merged and #clusters < S.espMax then
+				clusters[#clusters + 1] = {inst = e.inst, name = n, pos = e.pos, count = 1}
+			end
+		end
+
+		if not ESP.gui then
+			local g = Instance.new("ScreenGui")
+			g.Name, g.ResetOnSpawn, g.IgnoreGuiInset, g.DisplayOrder = "AM_ESP", false, true, 998
+			g.Parent = ScreenGui.Parent
+			ESP.gui = g
+		end
+		local keep, items = {}, {}
+		for _, c in ipairs(clusters) do
+			local ad = adornee(c.inst)
+			if ad then
+				local it = ESP.map[c.inst]
+				if not it then
+					it = {inst = c.inst, label = makeLabel()}
+					ESP.map[c.inst] = it
+				end
+				it.ad, it.name, it.count, it.lastD = ad, c.name, c.count, nil
+				local inst = c.inst
+				it.parent = (not inst:IsA("Model") and not inst:IsA("Tool") and inst.Parent and inst.Parent ~= workspace)
+					and inst.Parent.Name or nil
+				keep[c.inst] = true
+				items[#items + 1] = it
+			end
+		end
+		for inst, it in pairs(ESP.map) do
+			if not keep[inst] then
+				it.label:Destroy()
+				ESP.map[inst] = nil
+			end
+		end
+		ESP.items = items
+	end
+
+	-- Mỗi khung hình: đặt vị trí nhãn, cập nhật số mét, đẩy nhãn lên nếu bị chồng
+	function ESP.render()
+		local cam, root = workspace.CurrentCamera, getRoot()
+		if not cam or not root then return end
+		local placed = {}
+		for _, it in ipairs(ESP.items) do
+			local ad, lb = it.ad, it.label
+			if not ad or not ad.Parent or not lb.Parent then
+				lb.Visible = false
+			else
+				local v, on = cam:WorldToViewportPoint(ad.Position + Vector3.new(0, 2, 0))
+				if not on or v.Z <= 0 then
+					lb.Visible = false
+				else
+					local d = math.floor((ad.Position - root.Position).Magnitude)
+					if it.lastD ~= d or lb.TextSize ~= S.espSize then
+						it.lastD = d
+						lb.TextSize = S.espSize
+						lb.Text = fmt(it, d)
+					end
+					local w, h = lb.AbsoluteSize.X, lb.AbsoluteSize.Y
+					if w < 20 then w, h = 100, 34 end
+					local x, y = v.X, v.Y
+					for _ = 1, 12 do
+						local hit = false
+						for _, r in ipairs(placed) do
+							if math.abs(x - r[1]) < (w + r[3]) / 2 + 2 and math.abs(y - r[2]) < (h + r[4]) / 2 + 2 then
+								y = y - (h + 3)
+								hit = true
+								break
+							end
+						end
+						if not hit then break end
+					end
+					placed[#placed + 1] = {x, y - h / 2, w, h}
+					lb.Position = UDim2.fromOffset(x, y)
+					lb.Visible = true
+				end
+			end
+		end
+	end
+
+	function ESP.start()
+		ESP.on = true
+		if ESP.rconn then ESP.rconn:Disconnect() end
+		ESP.rconn = track(RunService.RenderStepped:Connect(ESP.render))
+		startLoop("esp", ESP.refresh, function() return 1.5 end)
+	end
+	function ESP.stop()
+		ESP.on = false
+		stopLoop("esp")
+		ESP.clear()
+	end
+end
+
+-- ---------- Đọc máu (Humanoid + máu tùy chỉnh của game: Attribute / NumberValue) ----------
+local Hp = {name = (type(Config.hpName) == "string") and Config.hpName or "", peak = 0,
+	cur = nil, max = nil, scanAt = 0, label = ""}
+do
+	local function isHpName(n)
+		n = n:lower()
+		if n:find("max", 1, true) or n:find("regen", 1, true) or n:find("rate", 1, true)
+			or n:find("damage", 1, true) then return false end
+		if n:find("health", 1, true) then return true end
+		local sp = " " .. n:gsub("[^a-z]", " ") .. " "
+		return sp:find(" hp ", 1, true) ~= nil or n:find("curhp", 1, true) ~= nil
+			or n:find("currenthp", 1, true) ~= nil
+	end
+	local function isMaxName(n)
+		n = n:lower()
+		if not n:find("max", 1, true) then return false end
+		return n:find("health", 1, true) ~= nil or n:find("hp", 1, true) ~= nil
+	end
+
+	local function sources()
+		local out = {}
+		for _, holder in ipairs({getChar(), LocalPlayer}) do
+			if holder then
+				for k, v in pairs(holder:GetAttributes()) do
+					if type(v) == "number" then
+						out[#out + 1] = {name = k, where = "Attribute",
+							get = function() return holder:GetAttribute(k) end,
+							set = function(x) holder:SetAttribute(k, x) end}
+					end
+				end
+				for _, d in ipairs(holder:GetDescendants()) do
+					if d:IsA("NumberValue") or d:IsA("IntValue") then
+						out[#out + 1] = {name = d.Name, where = "Value",
+							get = function() return d.Value end,
+							set = function(x) d.Value = x end}
+					end
+					if #out > 400 then break end
+				end
+			end
+		end
+		return out
+	end
+
+	function Hp.scan()
+		Hp.cur, Hp.max, Hp.label = nil, nil, ""
+		local want = trim(Hp.name):lower()
+		for _, src in ipairs(sources()) do
+			local n = src.name:lower()
+			if not Hp.cur and ((want ~= "" and n == want) or (want == "" and isHpName(src.name))) then Hp.cur = src end
+			if not Hp.max and isMaxName(src.name) then Hp.max = src end
+		end
+		if Hp.cur then Hp.label = Hp.cur.where .. " " .. Hp.cur.name end
+		Hp.scanAt = os.clock()
+	end
+
+	function Hp.read()
+		if not Hp.cur and os.clock() - Hp.scanAt > 2 then Hp.scan() end
+		if not Hp.cur then return nil end
+		local ok, cur = pcall(Hp.cur.get)
+		if not ok or type(cur) ~= "number" then Hp.cur = nil return nil end
+		local mx
+		if Hp.max then
+			local okm, m = pcall(Hp.max.get)
+			if okm and type(m) == "number" then mx = m end
+		end
+		if cur > Hp.peak then Hp.peak = cur end
+		return cur, mx or Hp.peak
+	end
+
+	-- Tỉ lệ máu thấp nhất giữa Humanoid và máu tùy chỉnh (1 = đầy)
+	function Hp.ratio()
+		local best
+		local h = getHum()
+		if h and h.Health > 0 and h.MaxHealth > 0 and h.MaxHealth < 1e8 then best = h.Health / h.MaxHealth end
+		local cur, mx = Hp.read()
+		if cur and mx and mx > 0 then
+			local r = cur / mx
+			if not best or r < best then best = r end
+		end
+		return best
+	end
+
+	function Hp.report()
+		Hp.scan()
+		local cur, mx = Hp.read()
+		local h = getHum()
+		print("[AlienMango] Các giá trị số tìm thấy (Character + Player):")
+		for _, src in ipairs(sources()) do
+			local okv, v = pcall(src.get)
+			print("   " .. src.where .. "  " .. src.name .. " = " .. tostring(okv and v or "?"))
+		end
+		if cur then
+			toast("Máu: " .. Hp.label .. " = " .. math.floor(cur) .. "/" .. math.floor(mx or 0))
+		else
+			toast("Không thấy máu tuỳ chỉnh • Humanoid " .. (h and (math.floor(h.Health) .. "/" .. math.floor(h.MaxHealth)) or "?")
+				.. "  (xem F9)")
+		end
+	end
+
+	track(LocalPlayer.CharacterAdded:Connect(function() Hp.cur, Hp.max, Hp.peak, Hp.scanAt = nil, nil, 0, 0 end))
+end
+
+-- ---------- God mode ----------
+local God = {conn = nil}
+do
+	function God.apply()
+		local h, c = getHum(), getChar()
+		if not h then return end
+		pcall(function()
+			h.MaxHealth = math.huge
+			h.Health = math.huge
+			h:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+		end)
+		if c and not c:FindFirstChild("AM_FF") then
+			pcall(function()
+				local ff = Instance.new("ForceField")
+				ff.Name, ff.Visible, ff.Parent = "AM_FF", false, c
+			end)
+		end
+	end
+	function God.start()
+		God.stop(true)
+		God.apply()
+		God.conn = RunService.Heartbeat:Connect(function()
+			local h, c = getHum(), getChar()
+			if not h then return end
+			local cur, mx = Hp.read()
+			if cur and mx and cur < mx then pcall(Hp.cur.set, mx) end
+			if h.MaxHealth ~= math.huge or not (c and c:FindFirstChild("AM_FF")) then
+				God.apply()
+			elseif h.Health < h.MaxHealth then
+				h.Health = h.MaxHealth
+			end
+		end)
+	end
+	function God.stop(quiet)
+		if God.conn then God.conn:Disconnect() God.conn = nil end
+		if quiet then return end
+		local h, c = getHum(), getChar()
+		if h then
+			pcall(function()
+				h:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+				h.MaxHealth = 100
+				h.Health = 100
+			end)
+		end
+		local ff = c and c:FindFirstChild("AM_FF")
+		if ff then ff:Destroy() end
+	end
+end
+
+-- ---------- Tự thoát khi máu thấp / về chỗ chết ----------
+local Safe = {cf = nil, last = 0, deathCF = nil}
+do
+	function Safe.set()
+		local r = getRoot()
+		if r then Safe.cf = r.CFrame toast("Đã đặt điểm an toàn tại đây") end
+	end
+
+	-- Máu thấp hơn ngưỡng (Humanoid hoặc máu tùy chỉnh của game) → TP về điểm an toàn
+	function Safe.tick()
+		local r = getRoot()
+		if not r or not Safe.cf then return end
+		local ratio = Hp.ratio()
+		if ratio and ratio > 0 and ratio <= S.escapeHp / 100 and os.clock() - Safe.last > 1.5 then
+			Safe.last = os.clock()
+			teleportToCFrame(Safe.cf)
+			if State.escapeOnce then
+				toast("Máu thấp → đã về điểm an toàn (1 lần, đã tắt)")
+				if Toggles.autoEscape then Toggles.autoEscape.set(false) end
+			else
+				toast("Máu thấp → về điểm an toàn")
+			end
+		end
+	end
+
+	local function hookChar(c)
+		local h = c:WaitForChild("Humanoid", 10)
+		if h then
+			h.Died:Connect(function()
+				local r = c:FindFirstChild("HumanoidRootPart")
+				if r then Safe.deathCF = r.CFrame end
+			end)
+		end
+	end
+	track(LocalPlayer.CharacterAdded:Connect(function(c)
+		task.spawn(hookChar, c)
+		if State.respawnBack and Safe.deathCF then
+			task.spawn(function()
+				local r = c:WaitForChild("HumanoidRootPart", 10)
+				if r and Safe.deathCF then
+					task.wait(0.6) -- chờ game đặt xong chỗ hồi sinh
+					r.CFrame = Safe.deathCF + Vector3.new(0, 3, 0)
+					Safe.deathCF = nil
+					toast("Về chỗ vừa chết")
+				end
+			end)
+		end
+	end))
+	if getChar() then task.spawn(hookChar, getChar()) end
+end
+
+-- ---------- Kill Aura (đánh NPC trong phạm vi bằng tool đang cầm) ----------
+local KA = {set = {}, conn = nil}
+do
+	local function add(h)
+		if h:IsA("Humanoid") then
+			local m = h.Parent
+			if m and m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then KA.set[h] = true end
+		end
+	end
+
+	function KA.stop()
+		if KA.conn then KA.conn:Disconnect() KA.conn = nil end
+		KA.set = {}
+	end
+
+	function KA.start()
+		KA.stop()
+		local conn = workspace.DescendantAdded:Connect(add)
+		KA.conn = conn
+		task.spawn(function()
+			for i, d in ipairs(workspace:GetDescendants()) do
+				if KA.conn ~= conn then return end
+				add(d)
+				if i % 3000 == 0 then RunService.Heartbeat:Wait() end
+			end
+		end)
+	end
+
+	function KA.tick()
+		local root, hum = getRoot(), getHum()
+		if not root or not hum or hum.Health <= 0 then return end
+		local tool = equipTool()
+		local handle = tool and tool:FindFirstChild("Handle")
+		local hits, nearest, nd = 0, nil, nil
+		for h in pairs(KA.set) do
+			local m = h.Parent
+			if not m then
+				KA.set[h] = nil
+			elseif h.Health > 0 then
+				local part = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+				if part then
+					local d = (part.Position - root.Position).Magnitude
+					if d <= S.kaRange then
+						if not nd or d < nd then nearest, nd = part, d end
+						if State.kaTouch and handle and handle:IsA("BasePart") and firetouchinterest then
+							pcall(function()
+								firetouchinterest(handle, part, 0)
+								firetouchinterest(handle, part, 1)
+							end)
+						end
+						hits = hits + 1
+						if hits >= 8 then break end
+					end
+				end
+			end
+		end
+		if hits > 0 and nearest then
+			if State.kaFace then
+				local np = nearest.Position
+				local flat = Vector3.new(np.X, root.Position.Y, np.Z)
+				if (flat - root.Position).Magnitude > 0.1 then root.CFrame = CFrame.lookAt(root.Position, flat) end
+			end
+			if tool then pcall(function() tool:Activate() end) end
+		end
+	end
+end
+
+-- ---------- Points ----------
+local PointsList, renderPoints
+local function addPoint(nameFromBox)
+	local root = getRoot()
+	if not root then return end
+	local name = trim(nameFromBox or "")
+	if name == "" then name = "Điểm " .. (#points + 1) end
+	name = string.sub(name, 1, 24)
+	points[#points + 1] = {name = name, c = {root.CFrame:GetComponents()}}
+	saveConfig()
+	renderPoints()
+	toast("Đã lưu: " .. name)
+end
+local function pointCF(pt) return CFrame.new(table.unpack(pt.c)) end
+local function teleportLastPoint()
+	local last = points[#points]
+	if last then teleportToCFrame(pointCF(last)) toast("Về: " .. last.name) end
+end
+local function teleportBack()
+	if prevCF then teleportToCFrame(prevCF) toast("Quay lại vị trí trước") end
+end
+
+
+-- ---------- Chat ----------
+local function sendChat(msg)
+	msg = trim(msg or "")
+	if msg == "" then return end
+	pcall(function()
+		if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+			local ch = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+			if ch then ch:SendAsync(msg) end
+		else
+			local ev = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+			local say = ev and ev:FindFirstChild("SayMessageRequest")
+			if say then say:FireServer(msg, "All") end
+		end
+	end)
+end
+
+-- =========================================================
+-- UI: CÁC TAB
+-- =========================================================
+
+-- ---------- MOVE ----------
+do
+local pMove = newTab("MOVE", "🚀", "Di chuyển")
+section(pMove, "DI CHUYỂN")
+addToggle(pMove, "fly",     "Fly",        {key = "E", fn = function(v) if v then startFly() else stopFly() end end})
+addToggle(pMove, "noclip",  "Noclip",     {key = "N", fn = function(v) if v then startNoclip() else stopNoclip() end end})
+addToggle(pMove, "infjump", "Inf Jump",   {key = "J", fn = function(v) if v then startInfJump() else stopInfJump() end end})
+addToggle(pMove, "run",     "Run Speed",  {key = "X", fn = function(v) if v then startRun() else stopRun() end end})
+addToggle(pMove, "ragdoll", "Ragdoll",    {key = "R", fn = function(v) if v then startRagdoll() else stopRagdoll() end end})
+section(pMove, "TỐC ĐỘ")
+addSlider(pMove, "flySpeed", "Fly speed", 1, 500, 1, 0)
+addSlider(pMove, "runSpeed", "Run speed", 1, 500, 1, 0)
+section(pMove, "TELEPORT")
+addToggle(pMove, "clickTP", "Click TP (bấm là dịch chuyển)", {key = "T", fn = function() end})
+addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = true, default = true})
+end
+
+-- ---------- FARM ----------
+do
+local pFarm = newTab("FARM", "⛏", "Farm")
+section(pFarm, "AUTO DIG")
+addToggle(pFarm, "autoDig", "Auto Dig", {key = "G", fn = function(v)
+	if v then startLoop("dig", digOnce, function() return S.digDelay end) else stopLoop("dig") end
+end})
+local toolBox = addTextRow(pFarm, "Tên tool (để trống = tool đầu tiên)", toolName, {})
+toolBox.FocusLost:Connect(function()
+	toolName = trim(toolBox.Text)
+	Config.toolName = toolName
+	saveConfig()
+end)
+addToggle(pFarm, "digMouse", "Thêm click chuột giữa màn hình", {noKey = true, persist = true, default = false})
+addSlider(pFarm, "digDelay", "Dig delay (giây)", 0.03, 3, 0.01, 2)
+
+section(pFarm, "AUTO MINE")
+note(pFarm, "Ore lấy từ list ở tab TP ORE. List trống → chỉ đào (Auto Dig) tại chỗ.", 28)
+addToggle(pFarm, "autoMine", "Auto Mine", {key = "Z", fn = function(v)
+	if v then
+		mineScan = 0
+		startLoop("mine", mineStep, function() return S.mineDelay end)
+	else
+		stopLoop("mine")
+	end
+end})
+addToggle(pFarm, "mineTP", "Tự TP tới ore khi ngoài radius", {noKey = true, persist = true, default = false})
+addSlider(pFarm, "mineRadius", "Mine radius (studs)", 1, 500, 1, 0)
+addSlider(pFarm, "mineDelay", "Mine delay (giây)", 0.03, 3, 0.01, 2)
+
+section(pFarm, "KILL AURA  (tự đánh NPC trong phạm vi bằng tool đang cầm)")
+addToggle(pFarm, "killAura", "Kill Aura", {key = "Q", fn = function(v)
+	if v then
+		KA.start()
+		startLoop("ka", KA.tick, function() return S.kaDelay end)
+	else
+		stopLoop("ka")
+		KA.stop()
+	end
+end})
+addToggle(pFarm, "kaFace", "Tự quay mặt về NPC gần nhất", {noKey = true, persist = true, default = true})
+addToggle(pFarm, "kaTouch", "Gửi cú chạm vào NPC (cho vũ khí cận chiến)", {noKey = true, persist = true, default = true})
+addSlider(pFarm, "kaRange", "Phạm vi Kill Aura (studs)", 3, 100, 1, 0)
+addSlider(pFarm, "kaDelay", "Tốc độ đánh (giây / lần)", 0.03, 1, 0.01, 2)
+
+section(pFarm, "AUTO AIM NPC")
+addToggle(pFarm, "autoAim", "Auto Aim NPC", {key = "V", fn = function(v) if v then startAim() else stopAim() end end})
+addToggle(pFarm, "aimWall", "Kiểm tra vật cản (wall check)", {noKey = true, persist = true, default = true})
+addCycle(pFarm, "aimPartIdx", "Ngắm vào", {"Head", "Thân (RootPart)"})
+addSlider(pFarm, "aimRange", "Aim range (studs)", 10, 2000, 1, 0)
+addSlider(pFarm, "aimFov", "Aim FOV (pixel)", 50, 1500, 10, 0)
+addSlider(pFarm, "aimSmooth", "Độ mượt (1 = khoá cứng)", 0.05, 1, 0.05, 2)
+end
+
+-- ---------- TP ITEM ----------
+do
+local pItem = newTab("TPITEM", "📦", "TP Item")
+section(pItem, "BRING / TP THEO TÊN")
+local BringBox, bringBtns = addTextRow(pItem, "Tên / Value item...", bringName, {"BRING", "TP"})
+local function currentBringName()
+	local t = trim(BringBox.Text)
+	if t ~= "" then bringName = t Config.bringName = t saveConfig() end
+	return bringName
+end
+BringBox.FocusLost:Connect(function() BringBox.Text = currentBringName() end)
+bringBtns[1].MouseButton1Click:Connect(function() bringItems(currentBringName()) end)
+bringBtns[2].MouseButton1Click:Connect(function() tpToItem(currentBringName()) end)
+
+section(pItem, "TÙY CHỌN")
+addAction(pItem, "tpNearItem", "TP tới item gần nhất trong list", "I", Fx.tpNearestItem)
+addToggle(pItem, "bringLoop", "Loop Bring", {key = "H", fn = function(v)
+	if v then
+		startLoop("bring", function() bringItems(bringName, true) end, function() return S.bringInterval end)
+	else
+		stopLoop("bring")
+	end
+end})
+addSlider(pItem, "bringInterval", "Bring interval (giây)", 0.2, 5, 0.1, 1)
+addToggle(pItem, "deepSearch", "Tìm sâu (Value / Attribute / Text) - chậm hơn", {noKey = true, persist = true, default = true})
+
+addAction(pItem, "pickItem", "Thêm vật dưới con trỏ vào list ITEM", nil, function() Fx.pickUnderMouse(bringList, Fx.renderBring) end)
+
+section(pItem, "LIST ITEM  (bấm tên = chọn vào ô trên)")
+Fx.renderBring = addNameList(pItem, "Thêm tên item...", bringList,
+	function(name) bringName = name Config.bringName = name BringBox.Text = name saveConfig() end,
+	{
+		{text = "BRING", fn = function(n) bringName = n BringBox.Text = n bringItems(n) end},
+		{text = "TP",    fn = function(n) tpToItem(n) end},
+	})
+end
+
+-- ---------- TP ORE ----------
+do
+local pOre = newTab("TPORE", "💎", "TP Ore")
+section(pOre, "TELEPORT ORE")
+addAction(pOre, "tpNearOre", "TP tới ore gần nhất trong list", "O", Fx.tpNearestOre)
+addAction(pOre, "pickOre", "Thêm vật dưới con trỏ vào list ORE", "P", function() Fx.pickUnderMouse(oreList, Fx.renderOre) end)
+note(pOre, "List ORE cũng là list mà Auto Mine (tab FARM) và ESP chế độ \"Chỉ ORE\" sử dụng.", 28)
+
+section(pOre, "LIST ORE  (bấm tên = TP)")
+Fx.renderOre = addNameList(pOre, "Thêm tên ore...", oreList,
+	function(name) tpToOre(name) end,
+	{{text = "TP", fn = function(n) tpToOre(n) end}})
+
+end
+
+-- ---------- PLAYER ----------
+do
+local function others()
+	local out = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then out[#out + 1] = p end
+	end
+	table.sort(out, function(a, b) return a.Name:lower() < b.Name:lower() end)
+	return out
+end
+local function tpPlayer(p)
+	local r = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+	if not r then toast("Không thấy nhân vật của " .. (p and p.Name or "?")) return end
+	teleportToCFrame(r.CFrame * CFrame.new(0, 0, 4))
+	toast("TP tới: " .. p.DisplayName)
+end
+local function findByName(q)
+	q = trim(q):lower()
+	if q == "" then return nil end
+	local partial
+	for _, p in ipairs(others()) do
+		local n, d = p.Name:lower(), p.DisplayName:lower()
+		if n == q or d == q then return p end
+		if not partial and (n:find(q, 1, true) or d:find(q, 1, true)) then partial = p end
+	end
+	return partial
+end
+local nextIdx = 0
+local function tpNext()
+	local list = others()
+	if #list == 0 then toast("Server không có ai khác") return end
+	nextIdx = nextIdx % #list + 1
+	tpPlayer(list[nextIdx])
+end
+local function tpNear()
+	local root = getRoot()
+	if not root then return end
+	local best, bd
+	for _, p in ipairs(others()) do
+		local r = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if r then
+			local d = (r.Position - root.Position).Magnitude
+			if not bd or d < bd then best, bd = p, d end
+		end
+	end
+	if best then tpPlayer(best) else toast("Không có ai trong server") end
+end
+
+local pPl = newTab("PLAYER", "👥", "Người chơi")
+section(pPl, "TELEPORT TỚI NGƯỜI CHƠI")
+local PlBox, plBtns = addTextRow(pPl, "Tên người chơi (gõ một phần cũng được)...", "", {"TP"})
+local function tpByBox()
+	local p = findByName(PlBox.Text)
+	if p then tpPlayer(p) else toast("Không thấy người chơi: " .. trim(PlBox.Text)) end
+end
+plBtns[1].MouseButton1Click:Connect(tpByBox)
+PlBox.FocusLost:Connect(function(enter) if enter then tpByBox() end end)
+addAction(pPl, "tpNextPlayer", "TP tới người chơi kế tiếp", "U", tpNext)
+addAction(pPl, "tpNearPlayer", "TP tới người chơi gần nhất", nil, tpNear)
+
+section(pPl, "TRONG SERVER  (bấm tên = TP)")
+local PlList = makeList(pPl)
+local function render()
+	clearList(PlList)
+	local q = trim(PlBox.Text):lower()
+	local shown = 0
+	for i, p in ipairs(others()) do
+		if q == "" or p.Name:lower():find(q, 1, true) or p.DisplayName:lower():find(q, 1, true) then
+			shown = shown + 1
+			addListRow(PlList, i, p.DisplayName .. "  (@" .. p.Name .. ")", function() tpPlayer(p) end,
+				{{text = "TP", fn = function() tpPlayer(p) end}}, nil)
+		end
+	end
+	if shown == 0 then emptyLabel(PlList, "Không có người chơi nào") end
+end
+PlBox:GetPropertyChangedSignal("Text"):Connect(render)
+track(Players.PlayerAdded:Connect(function() task.delay(0.2, render) end))
+track(Players.PlayerRemoving:Connect(function() task.delay(0.2, render) end))
+render()
+end
+
+-- ---------- ESP ----------
+do
+local pEsp = newTab("ESP", "👁", "ESP")
+section(pEsp, "ESP TÊN ITEM / ORE")
+note(pEsp, "Hiện tên + khoảng cách trên đầu vật để biết tên đúng. Vật cùng tên nằm sát nhau được gộp thành \"Tên ×N\".", 40)
+addToggle(pEsp, "esp", "Bật ESP", {key = "Y", fn = function(v) if v then ESP.start() else ESP.stop() end end})
+
+section(pEsp, "BỘ LỌC")
+addCycle(pEsp, "espMode", "Hiện", {"Tất cả", "Chỉ ORE trong list", "Chỉ ITEM trong list"})
+local EspBox = addTextRow(pEsp, "Lọc theo tên (để trống = không lọc)", "", {})
+EspBox.FocusLost:Connect(function() ESP.filter = EspBox.Text end)
+
+section(pEsp, "HIỂN THỊ")
+addSlider(pEsp, "espRange", "Phạm vi (studs)", 10, 2000, 10, 0)
+addSlider(pEsp, "espMax", "Số nhãn tối đa", 5, 200, 5, 0)
+addSlider(pEsp, "espSize", "Cỡ chữ nhãn", 9, 22, 1, 0)
+end
+
+-- ---------- POINTS ----------
+do
+local pPoints = newTab("POINTS", "📍", "Điểm lưu")
+section(pPoints, "PHÍM TẮT")
+addAction(pPoints, "savePoint", "Lưu điểm tại vị trí hiện tại", "K", function() addPoint(nil) end)
+addAction(pPoints, "lastPoint", "Về điểm lưu cuối", "L", teleportLastPoint)
+addAction(pPoints, "backTP", "Quay lại vị trí trước khi TP", nil, teleportBack)
+section(pPoints, "LƯU ĐIỂM CÓ TÊN  (điểm lưu riêng cho từng game)")
+local PointBox, pointBtns = addTextRow(pPoints, "Tên điểm...", "", {"+ LƯU"})
+pointBtns[1].MouseButton1Click:Connect(function() addPoint(PointBox.Text) PointBox.Text = "" end)
+PointBox.FocusLost:Connect(function(enter) if enter then addPoint(PointBox.Text) PointBox.Text = "" end end)
+PointsList = makeList(pPoints)
+renderPoints = function()
+	clearList(PointsList)
+	if #points == 0 then emptyLabel(PointsList, "Chưa có điểm nào") return end
+	for i, pt in ipairs(points) do
+		addListRow(PointsList, i, pt.name, function() teleportToCFrame(pointCF(pt)) end, {},
+			function() table.remove(points, i) saveConfig() renderPoints() end)
+	end
+end
+renderPoints()
+end
+
+-- ---------- MISC ----------
+do
+local pMisc = newTab("MISC", "✨", "Tiện ích")
+section(pMisc, "HIỂN THỊ")
+addToggle(pMisc, "fullbright", "Fullbright", {key = "B", fn = function(v) if v then startFullbright() else stopFullbright() end end})
+section(pMisc, "BẢO VỆ")
+addToggle(pMisc, "godmode", "God Mode (chỉ chặn sát thương phía client)", {key = "M", fn = function(v) if v then God.start() else God.stop() end end})
+addToggle(pMisc, "autoEscape", "Tự thoát khi máu thấp (về điểm an toàn)", {noKey = true, fn = function(v)
+	if v then
+		if not Safe.cf then Safe.set() end
+		startLoop("safe", Safe.tick, function() return 0.1 end)
+	else
+		stopLoop("safe")
+	end
+end})
+addToggle(pMisc, "escapeOnce", "Chỉ thoát 1 lần rồi tự tắt", {noKey = true, persist = true, default = false})
+addSlider(pMisc, "escapeHp", "Thoát khi máu ≤ (%)", 5, 90, 5, 0)
+addAction(pMisc, "setSafe", "Đặt điểm an toàn tại vị trí này", nil, Safe.set)
+addToggle(pMisc, "respawnBack", "Chết xong → hồi sinh về chỗ vừa chết", {noKey = true, persist = true, default = false})
+section(pMisc, "ĐỌC MÁU CỦA GAME")
+addAction(pMisc, "hpReport", "Kiểm tra nguồn máu của game", nil, function() Hp.report() end)
+local HpBox = addTextRow(pMisc, "Tên giá trị máu (để trống = tự dò)", Hp.name, {})
+HpBox.FocusLost:Connect(function()
+	Hp.name = trim(HpBox.Text)
+	Config.hpName = Hp.name
+	saveConfig()
+	Hp.cur, Hp.max, Hp.peak = nil, nil, 0
+	Hp.scan()
+end)
+section(pMisc, "HỆ THỐNG")
+addToggle(pMisc, "antiAFK", "Anti AFK (không bị kick khi đứng yên)", {noKey = true, persist = true, default = true, initCall = true, fn = setAntiAFK})
+end
+
+-- ---------- CHAT ----------
+do
+local pChat = newTab("CHAT", "💬", "Chat")
+section(pChat, "GỬI TIN NHẮN")
+local ChatBox, chatBtns = addTextRow(pChat, "Nhập tin nhắn...", "", {"GỬI"})
+local function doSend() sendChat(ChatBox.Text) ChatBox.Text = "" end
+chatBtns[1].MouseButton1Click:Connect(doSend)
+ChatBox.FocusLost:Connect(function(enter) if enter then doSend() end end)
+end
+
+-- ---------- SETTINGS + INPUT + KHỞI ĐỘNG ----------
+do
+local pSet = newTab("SETTINGS", "⚙", "Cài đặt")
+
+local MainScale = new("UIScale", {Scale = S.uiScale}, Main)
+
+section(pSet, "GIAO DIỆN")
+local function toggleUI() Main.Visible = not Main.Visible end
+addAction(pSet, "uiToggle", "Ẩn / hiện GUI", "RightShift", toggleUI)
+addSlider(pSet, "uiScale", "Cỡ GUI", 0.7, 1.3, 0.05, 2, function(v) MainScale.Scale = v end)
+
+local swRow = card(pSet, 42, ord(pSet))
+new("TextLabel", {Size = UDim2.new(0, 90, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1,
+	Text = "Màu chủ đạo", TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium, TextSize = 12,
+	TextXAlignment = Enum.TextXAlignment.Left}, swRow)
+local RB = {}
+function RB.seq(h)
+	local pts = {}
+	for k = 0, 6 do
+		pts[#pts + 1] = ColorSequenceKeypoint.new(k / 6, Color3.fromHSV((h + k / 6) % 1, 0.8, 1))
+	end
+	return ColorSequence.new(pts)
+end
+
+function RB.stop()
+	if RB.conn then RB.conn:Disconnect() RB.conn = nil end
+	mainGrad.Rotation = 45
+end
+function RB.start()
+	if RB.conn then RB.conn:Disconnect() end
+	local frame = 0
+	RB.conn = track(RunService.RenderStepped:Connect(function()
+		frame = frame + 1
+		local h = (os.clock() * 0.12) % 1
+		Theme.Accent = Color3.fromHSV(h, 0.75, 1)
+		Theme.Accent2 = Color3.fromHSV((h + 0.18) % 1, 0.75, 1)
+		if frame % 300 == 0 then -- dọn object đã bị huỷ
+			local j = 0
+			for i = 1, #accentProps do
+				local e = accentProps[i]
+				if e[1].Parent then j = j + 1 accentProps[j] = e end
+			end
+			for i = j + 1, #accentProps do accentProps[i] = nil end
+		end
+		for _, e in ipairs(accentProps) do
+			if e[1].Parent then e[1][e[2]] = e[3] and Theme.Accent2 or Theme.Accent end
+		end
+		local seq = ColorSequence.new(Theme.Accent, Theme.Accent2)
+		for _, g in ipairs(accentGrads) do
+			if g.Parent then g.Color = seq end
+		end
+		local rb = RB.seq(h)
+		mainGrad.Color = rb
+		titleGrad.Color = rb
+		mainGrad.Rotation = (os.clock() * 50) % 360
+		for _, b in pairs(tabBtns) do b.BackgroundColor3 = Theme.Accent end
+		for _, t in pairs(Toggles) do
+			if State[t.id] and t.trk then t.trk.BackgroundColor3 = Theme.Accent end
+		end
+	end))
+end
+
+local function applyAccent(i)
+	accIdx = i
+	Config.accent = i
+	if i == rainbowIdx then
+		RB.start()
+		saveConfig()
+		return
+	end
+	RB.stop()
+	local a = Accents[i] or Accents[1]
+	Theme.Accent, Theme.Accent2 = a[2], a[3]
+	for _, e in ipairs(accentProps) do
+		if e[1].Parent then e[1][e[2]] = e[3] and Theme.Accent2 or Theme.Accent end
+	end
+	for _, g in ipairs(accentGrads) do
+		if g.Parent then g.Color = ColorSequence.new(Theme.Accent, Theme.Accent2) end
+	end
+	for _, fn in ipairs(accentHooks) do pcall(fn) end
+	saveConfig()
+end
+if accIdx == rainbowIdx then RB.start() end
+for i, a in ipairs(Accents) do
+	local b = new("TextButton", {
+		Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -(#Accents - i + 1) * 30 - 4, 0.5, -12),
+		BackgroundColor3 = (i == rainbowIdx) and Color3.new(1, 1, 1) or a[2], Text = "", AutoButtonColor = false,
+	}, swRow)
+	corner(b, 12)
+	new("UIGradient", {Color = (i == rainbowIdx) and RB.seq(0) or ColorSequence.new(a[2], a[3]), Rotation = 45}, b)
+	b.MouseButton1Click:Connect(function() applyAccent(i) toast("Màu: " .. a[1]) end)
+end
+
+section(pSet, "PHÍM TẮT")
+note(pSet, "Bấm vào ô phím bên phải mỗi chức năng, rồi nhấn phím mới.\nEsc = huỷ  •  Backspace / Delete = bỏ phím  •  Trùng phím sẽ tự gỡ phím cũ.", 44)
+
+local unload = function() end -- định nghĩa lại bên dưới
+
+addAction(pSet, "_resetKeys", "Reset tất cả phím về mặc định", nil, function()
+	Config.keys = {}
+	saveConfig()
+	for id in pairs(Binds) do refreshKeyBtn(id) end
+	toast("Đã reset phím")
+end)
+section(pSet, "CONFIG")
+addAction(pSet, "_saveNow", CanFS and "Lưu config ngay" or "Executor không hỗ trợ lưu file", nil, function()
+	flushConfig()
+	toast(CanFS and "Đã lưu config" or "Không thể lưu")
+end)
+addAction(pSet, "_unload", "Gỡ script (tắt hết mọi thứ)", nil, function() unload() end)
+
+-- =========================================================
+-- INPUT: KEYBINDS + CLICK TP
+-- =========================================================
+track(UIS.InputBegan:Connect(function(input, gp)
+	-- Đang chờ gán phím mới
+	if listening then
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			local id, kc = listening, input.KeyCode
+			listening = nil
+			if kc == Enum.KeyCode.Escape then
+				-- huỷ
+			elseif kc == Enum.KeyCode.Backspace or kc == Enum.KeyCode.Delete then
+				Config.keys[id] = false
+				saveConfig()
+			else
+				for oid, b in pairs(Binds) do
+					if oid ~= id and getKey(oid) == kc.Name then
+						Config.keys[oid] = false
+						refreshKeyBtn(oid)
+						toast("Đã gỡ " .. kc.Name .. " khỏi: " .. b.name)
+					end
+				end
+				Config.keys[id] = kc.Name
+				saveConfig()
+			end
+			refreshKeyBtn(id)
+		end
+		return
+	end
+
+	if gp then return end
+
+	if input.UserInputType == Enum.UserInputType.Keyboard then
+		local name = input.KeyCode.Name
+		for id, b in pairs(Binds) do
+			if getKey(id) == name then task.spawn(b.action) end
+		end
+	elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local ctrl = UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)
+		if State.clickTP or (State.ctrlTP and ctrl) then teleportToMouse() end
+	end
+end))
+
+-- Respawn: tắt các chức năng gắn với nhân vật cũ
+track(LocalPlayer.CharacterAdded:Connect(function()
+	if State.fly then Toggles.fly.set(false) end
+	if State.ragdoll then Toggles.ragdoll.set(false) end
+end))
+
+-- =========================================================
+-- THANH TRẠNG THÁI + NÚT NỔI + CLOSE / MINIMIZE / UNLOAD
+-- =========================================================
+local Footer = new("Frame", {Position = UDim2.new(0, 0, 1, -FOOT), Size = UDim2.new(1, 0, 0, FOOT),
+	BackgroundColor3 = Theme.Header, BorderSizePixel = 0}, Main)
+local FLeft = new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 14, 0, 0),
+	BackgroundTransparency = 1, Text = "", TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium,
+	TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left}, Footer)
+local FRight = new("TextLabel", {Size = UDim2.new(0.4, -14, 1, 0), Position = UDim2.new(0.6, 0, 0, 0),
+	BackgroundTransparency = 1, Text = "", TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold,
+	TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right}, Footer)
+
+do
+	local acc, frames = 0, 0
+	track(RunService.RenderStepped:Connect(function(dt)
+		frames = frames + 1
+		acc = acc + dt
+		if acc < 0.5 then return end
+		local fps = math.floor(frames / acc + 0.5)
+		frames, acc = 0, 0
+		local ping = 0
+		pcall(function()
+			ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
+		end)
+		local n = 0
+		for _, t in pairs(Toggles) do
+			if not t.opt and State[t.id] then n = n + 1 end
+		end
+		FLeft.Text = "FPS " .. fps .. "   •   Ping " .. ping .. " ms   •   " .. LocalPlayer.DisplayName
+		FRight.Text = (n > 0 and "● " or "○ ") .. n .. " chức năng đang bật"
+		FRight.TextColor3 = n > 0 and Theme.Accent or Theme.SubText
+	end))
+end
+
+local Fab = new("TextButton", {
+	Size = UDim2.new(0, 38, 0, 38), Position = UDim2.new(0, 8, 0.5, 0), BackgroundColor3 = Theme.Header,
+	Text = "🥭", TextSize = 18, Font = Enum.Font.GothamBold, AutoButtonColor = false, ZIndex = 100,
+}, ScreenGui)
+corner(Fab, 19)
+bindAccent(stroke(Fab, Theme.Accent, 1.5, 0.3), "Color")
+Fab.MouseButton1Click:Connect(toggleUI)
+
+local minimized = false
+MinBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	Side.Visible = not minimized
+	Content.Visible = not minimized
+	Footer.Visible = not minimized
+	tween(Main, {Size = UDim2.new(0, W, 0, minimized and HEAD or H)}, 0.25)
+end)
+
+unload = function()
+	for _, t in pairs(Toggles) do
+		if not t.persist and State[t.id] then pcall(t.set, false) end
+	end
+	if afkConn then afkConn:Disconnect() afkConn = nil end
+	Loops = {}
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	conns = {}
+	flushConfig()
+	genv.AlienMango_Unload = nil
+	pcall(function()
+		tween(Main, {Size = UDim2.new(0, W, 0, 0)}, 0.2)
+		task.wait(0.2)
+		ScreenGui:Destroy()
+	end)
+end
+genv.AlienMango_Unload = unload
+CloseBtn.MouseButton1Click:Connect(function() unload() end)
+
+-- =========================================================
+-- START
+-- =========================================================
+for _, fn in ipairs(pendingInit) do pcall(fn) end
+switchTab("MOVE")
+tween(Main, {Size = UDim2.new(0, W, 0, H)}, 0.3)
+task.delay(0.4, function() toast("Alien Mango V4 • RightShift = ẩn/hiện GUI") end)
+end
