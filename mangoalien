@@ -1,6 +1,6 @@
 --[[
 =====================================================================
-  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay)
+  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay đã fix)
   Tab:  MOVE • FARM • TP ITEM • TP ORE • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
   - ESP, TP Item, TP Ore giờ là 3 tab riêng
   - Sidebar có thanh chỉ báo, thanh trạng thái (FPS / Ping / số chức năng bật)
@@ -9,7 +9,7 @@
       Esc = huỷ  |  Backspace/Delete = bỏ phím
   - Tự lưu config (nếu executor có writefile)
   - Phím ẩn/hiện GUI mặc định: RightShift
-  - MỚI: Vehicle Fly (C, tab MOVE) • Giảm Lag 4 mức (F, tab MISC)
+  - Vehicle Fly (C, tab MOVE): dời cả model xe bằng PivotTo, lái A/D • Giảm Lag 4 mức (F, tab MISC)
 =====================================================================
 ]]
 
@@ -1985,13 +1985,47 @@ do
 end
 
 -- ---------- XE BAY (Vehicle Fly) ----------
-local VF = {bv = nil, bg = nil, conn = nil, nc = nil, root = nil, lock = nil, touched = {}}
+-- Dời cả model xe bằng PivotTo mỗi khung hình + triệt tiêu vận tốc.
+-- W/S: tiến lùi theo camera • Space/Shift: lên/xuống • A/D: xoay xe (hoặc đi ngang nếu tắt "Lái bằng A/D")
+local VF = {conn = nil, nc = nil, anchor = nil, model = nil, parts = {}, scan = 0, touched = {}}
 do
-	local function clean()
-		if VF.bv then VF.bv:Destroy() VF.bv = nil end
-		if VF.bg then VF.bg:Destroy() VF.bg = nil end
-		VF.root = nil
+	-- Tìm "mảnh xe": ghế đang ngồi, hoặc phần xe mà nhân vật bị hàn vào
+	local function findAnchor()
+		local hum, root = getHum(), getRoot()
+		local seat = hum and hum.SeatPart
+		if seat then return seat end
+		local c = getChar()
+		if root and c then
+			local ar = root.AssemblyRootPart
+			if ar and ar ~= root and not ar:IsDescendantOf(c) then return ar end
+		end
+		return nil
 	end
+
+	-- Lấy model xe ngoài cùng (để dời cả xe, bánh xe đi theo)
+	local function pickModel(anchor)
+		local m = anchor:FindFirstAncestorOfClass("Model")
+		if not m or m == workspace then return nil end
+		local top = m
+		while top.Parent and top.Parent ~= workspace and top.Parent:IsA("Model") do top = top.Parent end
+		if #top:GetDescendants() > 2500 then return m end -- model quá to (cả map) → dùng model gần ghế nhất
+		return top
+	end
+
+	local function collect()
+		local list = {}
+		if VF.model then
+			for _, d in ipairs(VF.model:GetDescendants()) do
+				if d:IsA("BasePart") then list[#list + 1] = d end
+			end
+		elseif VF.anchor then
+			local ok, parts = pcall(function() return VF.anchor:GetConnectedParts(true) end)
+			list = ok and parts or {VF.anchor}
+		end
+		VF.parts = list
+		VF.scan = os.clock()
+	end
+
 	local function restoreCollide()
 		for p in pairs(VF.touched) do
 			if p.Parent then p.CanCollide = true end
@@ -2002,51 +2036,63 @@ do
 	function VF.stop()
 		if VF.conn then VF.conn:Disconnect() VF.conn = nil end
 		if VF.nc then VF.nc:Disconnect() VF.nc = nil end
-		clean()
+		VF.anchor, VF.model, VF.parts = nil, nil, {}
 		restoreCollide()
 	end
 
 	function VF.start()
 		VF.stop()
-		local h0 = getHum()
-		if not (h0 and h0.SeatPart) then toast("Hãy ngồi vào xe (đã bật, sẽ tự chạy khi ngồi)") end
+		if not findAnchor() then toast("Hãy ngồi vào xe (đã bật, sẽ tự chạy khi ngồi)") end
 
-		VF.conn = RunService.RenderStepped:Connect(function()
-			local hum = getHum()
-			local seat = hum and hum.SeatPart
-			if not seat then clean() return end
-			local root = seat.AssemblyRootPart or seat
-			if VF.root ~= root or not VF.bv or VF.bv.Parent ~= root then
-				clean()
-				VF.root = root
-				VF.lock = root.CFrame.Rotation
-				VF.bv = new("BodyVelocity", {MaxForce = Vector3.new(1e9, 1e9, 1e9), Velocity = Vector3.zero}, root)
-				VF.bg = new("BodyGyro", {MaxTorque = Vector3.new(1e9, 1e9, 1e9), P = 1e4, D = 500,
-					CFrame = root.CFrame}, root)
+		VF.conn = RunService.Heartbeat:Connect(function(dt)
+			local anchor = findAnchor()
+			if not anchor then VF.anchor, VF.model, VF.parts = nil, nil, {} return end
+			if anchor ~= VF.anchor then
+				VF.anchor = anchor
+				VF.model = pickModel(anchor)
+				collect()
+			elseif os.clock() - VF.scan > 1.5 then
+				collect()
 			end
 
 			local cam = workspace.CurrentCamera
+			local hum = getHum()
+			local steer = State.vflyCam          -- true = A/D xoay xe
 			local d = Vector3.zero
+			local turn = 0
 			if not UIS:GetFocusedTextBox() then
 				if UIS:IsKeyDown(Enum.KeyCode.W) then d += cam.CFrame.LookVector end
 				if UIS:IsKeyDown(Enum.KeyCode.S) then d -= cam.CFrame.LookVector end
-				if UIS:IsKeyDown(Enum.KeyCode.A) then d -= cam.CFrame.RightVector end
-				if UIS:IsKeyDown(Enum.KeyCode.D) then d += cam.CFrame.RightVector end
+				if steer then
+					if UIS:IsKeyDown(Enum.KeyCode.A) then turn += 1 end
+					if UIS:IsKeyDown(Enum.KeyCode.D) then turn -= 1 end
+				else
+					if UIS:IsKeyDown(Enum.KeyCode.A) then d -= cam.CFrame.RightVector end
+					if UIS:IsKeyDown(Enum.KeyCode.D) then d += cam.CFrame.RightVector end
+				end
 				if UIS:IsKeyDown(Enum.KeyCode.Space) then d += Vector3.yAxis end
 				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
 			end
-			if d.Magnitude == 0 and hum.MoveDirection.Magnitude > 0 then d = hum.MoveDirection end -- mobile
+			if d.Magnitude == 0 and turn == 0 and hum and hum.MoveDirection.Magnitude > 0 then
+				d = hum.MoveDirection -- mobile
+			end
 			if d.Magnitude > 0 then d = d.Unit end
-			VF.bv.Velocity = d * S.vflySpeed
 
-			if State.vflyCam then
-				local l = cam.CFrame.LookVector
-				local flat = Vector3.new(l.X, 0, l.Z)
-				if flat.Magnitude > 0.01 then
-					VF.bg.CFrame = CFrame.lookAt(root.Position, root.Position + flat)
+			local cf = VF.model and VF.model:GetPivot() or anchor.CFrame
+			local newcf = cf
+			if turn ~= 0 then
+				newcf = CFrame.new(cf.Position) * CFrame.Angles(0, turn * 2.2 * dt, 0) * cf.Rotation
+			end
+			newcf = newcf + d * S.vflySpeed * dt
+
+			if VF.model then VF.model:PivotTo(newcf) else anchor.CFrame = newcf end
+
+			-- triệt tiêu vận tốc: xe không rơi / không lật / không bị game đẩy đi
+			for _, p in ipairs(VF.parts) do
+				if p.Parent then
+					p.AssemblyLinearVelocity = Vector3.zero
+					p.AssemblyAngularVelocity = Vector3.zero
 				end
-			else
-				VF.bg.CFrame = CFrame.new(root.Position) * VF.lock -- giữ xe thăng bằng, không lật
 			end
 		end)
 
@@ -2056,12 +2102,8 @@ do
 				if next(VF.touched) then restoreCollide() end
 				return
 			end
-			local hum = getHum()
-			local seat = hum and hum.SeatPart
-			local model = seat and seat:FindFirstAncestorOfClass("Model")
-			if not model then return end
-			for _, p in ipairs(model:GetDescendants()) do
-				if p:IsA("BasePart") and p.CanCollide then
+			for _, p in ipairs(VF.parts) do
+				if p.Parent and p.CanCollide then
 					VF.touched[p] = true
 					p.CanCollide = false
 				end
@@ -2092,10 +2134,10 @@ addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = 
 
 section(pMove, "XE BAY  (ngồi vào xe rồi bật)")
 addToggle(pMove, "vfly", "Vehicle Fly", {key = "C", fn = function(v) if v then VF.start() else VF.stop() end end})
-addToggle(pMove, "vflyCam", "Xe xoay theo hướng camera", {noKey = true, persist = true, default = true})
+addToggle(pMove, "vflyCam", "Lái bằng A/D (A/D xoay xe)", {noKey = true, persist = true, default = true})
 addToggle(pMove, "vflyNoclip", "Xe xuyên vật cản (noclip xe)", {noKey = true, persist = true, default = false})
 addSlider(pMove, "vflySpeed", "Tốc độ xe bay", 5, 600, 1, 0)
-note(pMove, "W/A/S/D bay theo camera • Space lên • Shift xuống. Nếu xe bị chạy lệch hướng, tắt \"Xe xoay theo hướng camera\".", 40)
+note(pMove, "W/S tiến lùi theo camera • Space lên • Shift xuống. Bật \"Lái bằng A/D\": A/D xoay xe. Tắt: A/D đi ngang, xe không xoay.", 40)
 end
 
 -- ---------- FARM ----------
@@ -2611,5 +2653,5 @@ CloseBtn.MouseButton1Click:Connect(function() unload() end)
 for _, fn in ipairs(pendingInit) do pcall(fn) end
 switchTab("MOVE")
 tween(Main, {Size = UDim2.new(0, W, 0, H)}, 0.3)
-task.delay(0.4, function() toast("Alien Mango V4 • RightShift = ẩn/hiện GUI") end)
+task.delay(0.4, function() toast("Alien Mango V4.1 • RightShift = ẩn/hiện GUI") end)
 end
