@@ -1,6 +1,6 @@
 --[[
 =====================================================================
-  👽 ALIEN MANGO 🥭  V4
+  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay)
   Tab:  MOVE • FARM • TP ITEM • TP ORE • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
   - ESP, TP Item, TP Ore giờ là 3 tab riêng
   - Sidebar có thanh chỉ báo, thanh trạng thái (FPS / Ping / số chức năng bật)
@@ -9,6 +9,7 @@
       Esc = huỷ  |  Backspace/Delete = bỏ phím
   - Tự lưu config (nếu executor có writefile)
   - Phím ẩn/hiện GUI mặc định: RightShift
+  - MỚI: Vehicle Fly (C, tab MOVE) • Giảm Lag 4 mức (F, tab MISC)
 =====================================================================
 ]]
 
@@ -101,6 +102,7 @@ local D = {
 	mineRadius = 25, mineDelay = 0.2, bringInterval = 1, aimPartIdx = 1,
 	espRange = 150, espMax = 60, espMode = 1, espSize = 13,
 	kaRange = 15, kaDelay = 0.15, escapeHp = 40, uiScale = 1,
+	lagLevel = 2, vflySpeed = 80,
 }
 local S = {}
 for k, v in pairs(D) do
@@ -1836,6 +1838,238 @@ local function sendChat(msg)
 	end)
 end
 
+-- ---------- GIẢM LAG (4 mức: Nhẹ → Cực mạnh) ----------
+S.lagLevel = math.clamp(tonumber(S.lagLevel) or 2, 1, 4)
+
+local Lag = {bk = setmetatable({}, {__mode = "k"}), level = 0, tok = 0, conns = {}}
+do
+	local LevelName = {"Nhẹ", "Vừa", "Mạnh", "Cực mạnh"}
+	local PARTICLE = {ParticleEmitter = true, Trail = true, Beam = true, Smoke = true, Fire = true, Sparkles = true}
+	local LIGHT    = {PointLight = true, SpotLight = true, SurfaceLight = true}
+	local POST     = {BlurEffect = true, BloomEffect = true, SunRaysEffect = true, DepthOfFieldEffect = true}
+
+	-- đổi thuộc tính và nhớ giá trị cũ để khôi phục khi tắt
+	local function setp(inst, prop, val)
+		local ok, old = pcall(function() return inst[prop] end)
+		if not ok or old == val then return end
+		local b = Lag.bk[inst]
+		if not b then b = {} Lag.bk[inst] = b end
+		if b[prop] == nil then b[prop] = old end
+		pcall(function() inst[prop] = val end)
+	end
+
+	function Lag.applyInst(inst, lv)
+		if inst:IsA("Terrain") then return end
+		if inst:IsA("BasePart") then
+			setp(inst, "CastShadow", false)                                  -- mức 1+
+			if lv >= 3 then
+				setp(inst, "Material", Enum.Material.SmoothPlastic)
+				setp(inst, "Reflectance", 0)
+			end
+			if lv >= 4 then
+				if inst:IsA("MeshPart") then setp(inst, "RenderFidelity", Enum.RenderFidelity.Performance) end
+				-- ẩn phụ kiện của người chơi khác
+				local acc = inst:FindFirstAncestorOfClass("Accessory")
+				if acc then
+					local ch = acc:FindFirstAncestorOfClass("Model")
+					if ch and ch ~= getChar() and Players:GetPlayerFromCharacter(ch) then
+						setp(inst, "Transparency", 1)
+					end
+				end
+			end
+			return
+		end
+		local cn = inst.ClassName
+		if POST[cn] then setp(inst, "Enabled", false) return end            -- mức 1+
+		if lv >= 2 and PARTICLE[cn] then setp(inst, "Enabled", false) return end
+		if lv >= 2 and cn == "Explosion" then setp(inst, "Visible", false) return end
+		if lv >= 3 and LIGHT[cn] then setp(inst, "Enabled", false) return end
+		if lv >= 3 and (cn == "Decal" or cn == "Texture") then setp(inst, "Transparency", 1) return end
+		if lv >= 3 and cn == "Atmosphere" then setp(inst, "Density", 0) setp(inst, "Haze", 0) return end
+		if lv >= 4 and cn == "ColorCorrectionEffect" then setp(inst, "Enabled", false) return end
+	end
+
+	function Lag.applyGlobal(lv)
+		setp(Lighting, "GlobalShadows", false)
+		if lv >= 3 then
+			setp(Lighting, "EnvironmentDiffuseScale", 0)
+			setp(Lighting, "EnvironmentSpecularScale", 0)
+		end
+		if lv >= 4 then setp(Lighting, "ShadowSoftness", 0) end
+
+		local t = workspace:FindFirstChildOfClass("Terrain")
+		if t then
+			setp(t, "WaterWaveSize", 0)
+			setp(t, "WaterWaveSpeed", 0)
+			setp(t, "WaterReflectance", 0)
+			if lv >= 2 and sethiddenproperty then
+				pcall(function()
+					if not Lag.decoSet then
+						Lag.deco = gethiddenproperty and gethiddenproperty(t, "Decoration")
+						Lag.decoSet = true
+					end
+					sethiddenproperty(t, "Decoration", false)   -- tắt cỏ
+				end)
+			end
+		end
+
+		if lv >= 2 then
+			pcall(function()
+				local r = settings().Rendering
+				if Lag.q == nil then Lag.q = r.QualityLevel end
+				r.QualityLevel = (lv >= 4 and Enum.QualityLevel.Level01)
+					or (lv >= 3 and Enum.QualityLevel.Level03) or Enum.QualityLevel.Level05
+			end)
+		end
+	end
+
+	function Lag.restore()
+		Lag.tok = Lag.tok + 1
+		for _, c in ipairs(Lag.conns) do pcall(function() c:Disconnect() end) end
+		Lag.conns = {}
+		for inst, props in pairs(Lag.bk) do
+			for prop, v in pairs(props) do pcall(function() inst[prop] = v end) end
+		end
+		Lag.bk = setmetatable({}, {__mode = "k"})
+		pcall(function()
+			if Lag.q ~= nil then settings().Rendering.QualityLevel = Lag.q Lag.q = nil end
+		end)
+		pcall(function()
+			if Lag.decoSet and sethiddenproperty then
+				sethiddenproperty(workspace:FindFirstChildOfClass("Terrain"), "Decoration", Lag.deco ~= false)
+			end
+		end)
+		Lag.decoSet = false
+		Lag.level = 0
+	end
+
+	function Lag.apply(lv)
+		Lag.restore()
+		Lag.level = lv
+		local tok = Lag.tok
+		Lag.applyGlobal(lv)
+
+		-- vật thể mới xuất hiện cũng được giảm lag ngay
+		for _, root in ipairs({workspace, Lighting}) do
+			Lag.conns[#Lag.conns + 1] = root.DescendantAdded:Connect(function(d)
+				if Lag.tok == tok then pcall(Lag.applyInst, d, lv) end
+			end)
+		end
+
+		task.spawn(function()
+			local n = 0
+			for _, root in ipairs({Lighting, workspace}) do
+				for _, d in ipairs(root:GetDescendants()) do
+					if Lag.tok ~= tok then return end
+					pcall(Lag.applyInst, d, lv)
+					n = n + 1
+					if n % 1500 == 0 then RunService.Heartbeat:Wait() end -- không làm đơ game
+				end
+			end
+			if Lag.tok == tok then toast("Giảm lag xong • mức " .. lv .. " (" .. LevelName[lv] .. ")") end
+		end)
+	end
+
+	function Lag.on()
+		Lag.apply(S.lagLevel)
+		-- đổi mức trong lúc đang bật → tự áp dụng lại
+		startLoop("lagwatch", function()
+			if Lag.level ~= 0 and Lag.level ~= S.lagLevel then Lag.apply(S.lagLevel) end
+		end, function() return 0.4 end)
+	end
+	function Lag.off()
+		stopLoop("lagwatch")
+		Lag.restore()
+		toast("Đã tắt giảm lag (khôi phục đồ hoạ)")
+	end
+end
+
+-- ---------- XE BAY (Vehicle Fly) ----------
+local VF = {bv = nil, bg = nil, conn = nil, nc = nil, root = nil, lock = nil, touched = {}}
+do
+	local function clean()
+		if VF.bv then VF.bv:Destroy() VF.bv = nil end
+		if VF.bg then VF.bg:Destroy() VF.bg = nil end
+		VF.root = nil
+	end
+	local function restoreCollide()
+		for p in pairs(VF.touched) do
+			if p.Parent then p.CanCollide = true end
+		end
+		VF.touched = {}
+	end
+
+	function VF.stop()
+		if VF.conn then VF.conn:Disconnect() VF.conn = nil end
+		if VF.nc then VF.nc:Disconnect() VF.nc = nil end
+		clean()
+		restoreCollide()
+	end
+
+	function VF.start()
+		VF.stop()
+		local h0 = getHum()
+		if not (h0 and h0.SeatPart) then toast("Hãy ngồi vào xe (đã bật, sẽ tự chạy khi ngồi)") end
+
+		VF.conn = RunService.RenderStepped:Connect(function()
+			local hum = getHum()
+			local seat = hum and hum.SeatPart
+			if not seat then clean() return end
+			local root = seat.AssemblyRootPart or seat
+			if VF.root ~= root or not VF.bv or VF.bv.Parent ~= root then
+				clean()
+				VF.root = root
+				VF.lock = root.CFrame.Rotation
+				VF.bv = new("BodyVelocity", {MaxForce = Vector3.new(1e9, 1e9, 1e9), Velocity = Vector3.zero}, root)
+				VF.bg = new("BodyGyro", {MaxTorque = Vector3.new(1e9, 1e9, 1e9), P = 1e4, D = 500,
+					CFrame = root.CFrame}, root)
+			end
+
+			local cam = workspace.CurrentCamera
+			local d = Vector3.zero
+			if not UIS:GetFocusedTextBox() then
+				if UIS:IsKeyDown(Enum.KeyCode.W) then d += cam.CFrame.LookVector end
+				if UIS:IsKeyDown(Enum.KeyCode.S) then d -= cam.CFrame.LookVector end
+				if UIS:IsKeyDown(Enum.KeyCode.A) then d -= cam.CFrame.RightVector end
+				if UIS:IsKeyDown(Enum.KeyCode.D) then d += cam.CFrame.RightVector end
+				if UIS:IsKeyDown(Enum.KeyCode.Space) then d += Vector3.yAxis end
+				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
+			end
+			if d.Magnitude == 0 and hum.MoveDirection.Magnitude > 0 then d = hum.MoveDirection end -- mobile
+			if d.Magnitude > 0 then d = d.Unit end
+			VF.bv.Velocity = d * S.vflySpeed
+
+			if State.vflyCam then
+				local l = cam.CFrame.LookVector
+				local flat = Vector3.new(l.X, 0, l.Z)
+				if flat.Magnitude > 0.01 then
+					VF.bg.CFrame = CFrame.lookAt(root.Position, root.Position + flat)
+				end
+			else
+				VF.bg.CFrame = CFrame.new(root.Position) * VF.lock -- giữ xe thăng bằng, không lật
+			end
+		end)
+
+		-- noclip cho xe (tuỳ chọn)
+		VF.nc = RunService.Stepped:Connect(function()
+			if not State.vflyNoclip then
+				if next(VF.touched) then restoreCollide() end
+				return
+			end
+			local hum = getHum()
+			local seat = hum and hum.SeatPart
+			local model = seat and seat:FindFirstAncestorOfClass("Model")
+			if not model then return end
+			for _, p in ipairs(model:GetDescendants()) do
+				if p:IsA("BasePart") and p.CanCollide then
+					VF.touched[p] = true
+					p.CanCollide = false
+				end
+			end
+		end)
+	end
+end
+
 -- =========================================================
 -- UI: CÁC TAB
 -- =========================================================
@@ -1855,6 +2089,13 @@ addSlider(pMove, "runSpeed", "Run speed", 1, 500, 1, 0)
 section(pMove, "TELEPORT")
 addToggle(pMove, "clickTP", "Click TP (bấm là dịch chuyển)", {key = "T", fn = function() end})
 addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = true, default = true})
+
+section(pMove, "XE BAY  (ngồi vào xe rồi bật)")
+addToggle(pMove, "vfly", "Vehicle Fly", {key = "C", fn = function(v) if v then VF.start() else VF.stop() end end})
+addToggle(pMove, "vflyCam", "Xe xoay theo hướng camera", {noKey = true, persist = true, default = true})
+addToggle(pMove, "vflyNoclip", "Xe xuyên vật cản (noclip xe)", {noKey = true, persist = true, default = false})
+addSlider(pMove, "vflySpeed", "Tốc độ xe bay", 5, 600, 1, 0)
+note(pMove, "W/A/S/D bay theo camera • Space lên • Shift xuống. Nếu xe bị chạy lệch hướng, tắt \"Xe xoay theo hướng camera\".", 40)
 end
 
 -- ---------- FARM ----------
@@ -2090,6 +2331,10 @@ do
 local pMisc = newTab("MISC", "✨", "Tiện ích")
 section(pMisc, "HIỂN THỊ")
 addToggle(pMisc, "fullbright", "Fullbright", {key = "B", fn = function(v) if v then startFullbright() else stopFullbright() end end})
+section(pMisc, "GIẢM LAG")
+addToggle(pMisc, "antiLag", "Giảm Lag", {key = "F", fn = function(v) if v then Lag.on() else Lag.off() end end})
+addCycle(pMisc, "lagLevel", "Mức giảm lag", {"1 • Nhẹ", "2 • Vừa", "3 • Mạnh", "4 • Cực mạnh"})
+note(pMisc, "1 Nhẹ: tắt bóng + hiệu ứng ánh sáng, sóng nước.\n2 Vừa: + tắt hạt/khói/lửa/trail, cỏ, hạ chất lượng.\n3 Mạnh: + vật liệu phẳng, tắt decal/đèn/sương.\n4 Cực mạnh: + ẩn phụ kiện người khác, đồ hoạ thấp nhất.\nTắt toggle = khôi phục như cũ.", 96)
 section(pMisc, "BẢO VỆ")
 addToggle(pMisc, "godmode", "God Mode (chỉ chặn sát thương phía client)", {key = "M", fn = function(v) if v then God.start() else God.stop() end end})
 addToggle(pMisc, "autoEscape", "Tự thoát khi máu thấp (về điểm an toàn)", {noKey = true, fn = function(v)
@@ -2344,6 +2589,8 @@ unload = function()
 		if not t.persist and State[t.id] then pcall(t.set, false) end
 	end
 	if afkConn then afkConn:Disconnect() afkConn = nil end
+	pcall(Lag.restore)
+	pcall(VF.stop)
 	Loops = {}
 	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 	conns = {}
