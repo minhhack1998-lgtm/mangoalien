@@ -2136,7 +2136,7 @@ section(pMove, "XE BAY  (ngồi vào xe rồi bật)")
 addToggle(pMove, "vfly", "Vehicle Fly", {key = "C", fn = function(v) if v then VF.start() else VF.stop() end end})
 addToggle(pMove, "vflyCam", "Lái bằng A/D (A/D xoay xe)", {noKey = true, persist = true, default = true})
 addToggle(pMove, "vflyNoclip", "Xe xuyên vật cản (noclip xe)", {noKey = true, persist = true, default = false})
-addSlider(pMove, "vflySpeed", "Tốc độ xe bay", 5, 600, 1, 0)
+addSlider(pMove, "vflySpeed", "Tốc độ xe bay", 5, 60000, 1, 0)
 note(pMove, "W/S tiến lùi theo camera • Space lên • Shift xuống. Bật \"Lái bằng A/D\": A/D xoay xe. Tắt: A/D đi ngang, xe không xoay.", 40)
 end
 
