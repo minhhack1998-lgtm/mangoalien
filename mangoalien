@@ -214,7 +214,7 @@ bindGrad(new("UIGradient", {}, headLine))
 
 local Title = new("TextLabel", {
 	Size = UDim2.new(0, 150, 1, 0), Position = UDim2.new(0, 16, 0, 0), BackgroundTransparency = 1,
-	Text = "👽 Alien Mango 🥭", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+	Text = "👽 Alien Mango v1.1 🥭", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
 	TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
 }, Header)
 local titleGrad = bindGrad(new("UIGradient", {}, Title))
