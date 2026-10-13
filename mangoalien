@@ -3,10 +3,6 @@
   👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay đã fix + AUTO LOOT)
   Tab:  MOVE • FARM • TP ITEM • TP ORE • LOOT • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
   - ESP, TP Item, TP Ore giờ là 3 tab riêng
-  - Sidebar có thanh chỉ báo, thanh trạng thái (FPS / Ping / số chức năng bật)
-  - Chỉnh cỡ GUI (SETTINGS), màu accent đổi được (có Rainbow)
-  - TẤT CẢ phím tắt đổi được: bấm vào ô [phím] rồi nhấn phím mới
-      Esc = huỷ  |  Backspace/Delete = bỏ phím
   - Tự lưu config (nếu executor có writefile)
   - Phím ẩn/hiện GUI mặc định: RightShift
   - Vehicle Fly (C, tab MOVE): dời cả model xe bằng PivotTo, lái A/D • Giảm Lag 4 mức (F, tab MISC)
@@ -2307,7 +2303,7 @@ addToggle(pLoot, "autoLoot", "Auto Loot", {key = "F4", fn = function(v)
 		stopLoop("loot")
 	end
 end})
-addSlider(pLoot, "lootRadius", "Bán kính nhặt (studs)", 5, 1000, 1, 0)
+addSlider(pLoot, "lootRadius", "Bán kính nhặt (studs)", 5, 10000, 1, 0)
 addSlider(pLoot, "lootDelay", "Tốc độ quét (giây)", 0.05, 2, 0.05, 2)
 note(pLoot, "Gửi lệnh Pickup tới server cho mọi item trong workspace.Items nằm trong bán kính. Bán kính quá lớn có thể gây lag.", 40)
 end
