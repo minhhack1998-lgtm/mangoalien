@@ -1,7 +1,7 @@
 --[[
 =====================================================================
-  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay đã fix)
-  Tab:  MOVE • FARM • TP ITEM • TP ORE • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
+  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay đã fix + AUTO LOOT)
+  Tab:  MOVE • FARM • TP ITEM • TP ORE • LOOT • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
   - ESP, TP Item, TP Ore giờ là 3 tab riêng
   - Sidebar có thanh chỉ báo, thanh trạng thái (FPS / Ping / số chức năng bật)
   - Chỉnh cỡ GUI (SETTINGS), màu accent đổi được (có Rainbow)
@@ -10,6 +10,7 @@
   - Tự lưu config (nếu executor có writefile)
   - Phím ẩn/hiện GUI mặc định: RightShift
   - Vehicle Fly (C, tab MOVE): dời cả model xe bằng PivotTo, lái A/D • Giảm Lag 4 mức (F, tab MISC)
+  - Auto Loot (F4, tab LOOT): gửi lệnh Pickup tới server cho item trong bán kính
 =====================================================================
 ]]
 
@@ -103,6 +104,7 @@ local D = {
 	espRange = 150, espMax = 60, espMode = 1, espSize = 13,
 	kaRange = 15, kaDelay = 0.15, escapeHp = 40, uiScale = 1,
 	lagLevel = 2, vflySpeed = 80,
+	lootRadius = 15, lootDelay = 0.2,
 }
 local S = {}
 for k, v in pairs(D) do
@@ -2112,6 +2114,52 @@ do
 	end
 end
 
+-- ---------- AUTO LOOT (gửi lệnh Pickup tới server cho item trong bán kính) ----------
+local Loot = {remote = nil}
+do
+	local function lootPart(o)
+		if o:IsA("BasePart") then return o end
+		if o:IsA("Model") then
+			return o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
+				or o:FindFirstChildWhichIsA("BasePart", true)
+		end
+		return nil
+	end
+
+	function Loot.resolve()
+		Loot.remote = nil
+		-- đường dẫn gốc
+		local cur = ReplicatedStorage
+		for _, n in ipairs({"Packages", "_Index", "sleitnick_knit@1.4.6", "knit",
+			"Services", "ToolService", "RE", "Update"}) do
+			cur = cur and cur:FindFirstChild(n)
+		end
+		if cur and cur:IsA("RemoteEvent") then Loot.remote = cur return end
+		-- dự phòng: game đổi version knit thì tự dò lại
+		for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+			if d:IsA("RemoteEvent") and d.Name == "Update" and d.Parent and d.Parent.Name == "RE"
+				and d.Parent.Parent and d.Parent.Parent.Name == "ToolService" then
+				Loot.remote = d
+				return
+			end
+		end
+	end
+
+	function Loot.tick()
+		local root = getRoot()
+		local folder = workspace:FindFirstChild("Items")
+		if not root or not folder then return end
+		if not Loot.remote or not Loot.remote.Parent then Loot.resolve() end
+		if not Loot.remote then return end
+		for _, item in ipairs(folder:GetChildren()) do
+			local part = lootPart(item)
+			if part and (root.Position - part.Position).Magnitude <= S.lootRadius then
+				pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
+			end
+		end
+	end
+end
+
 -- =========================================================
 -- UI: CÁC TAB
 -- =========================================================
@@ -2244,6 +2292,24 @@ Fx.renderOre = addNameList(pOre, "Thêm tên ore...", oreList,
 	function(name) tpToOre(name) end,
 	{{text = "TP", fn = function(n) tpToOre(n) end}})
 
+end
+
+-- ---------- LOOT ----------
+do
+local pLoot = newTab("LOOT", "🧲", "Auto Loot")
+section(pLoot, "AUTO LOOT")
+addToggle(pLoot, "autoLoot", "Auto Loot", {key = "F4", fn = function(v)
+	if v then
+		Loot.resolve()
+		if not Loot.remote then toast("Chưa tìm thấy remote ToolService, sẽ thử lại khi chạy") end
+		startLoop("loot", Loot.tick, function() return S.lootDelay end)
+	else
+		stopLoop("loot")
+	end
+end})
+addSlider(pLoot, "lootRadius", "Bán kính nhặt (studs)", 5, 1000, 1, 0)
+addSlider(pLoot, "lootDelay", "Tốc độ quét (giây)", 0.05, 2, 0.05, 2)
+note(pLoot, "Gửi lệnh Pickup tới server cho mọi item trong workspace.Items nằm trong bán kính. Bán kính quá lớn có thể gây lag.", 40)
 end
 
 -- ---------- PLAYER ----------
