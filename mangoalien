@@ -1,12 +1,11 @@
 --[[
 =====================================================================
-  👽 ALIEN MANGO 🥭  V4  (+ Giảm Lag 4 mức + Xe bay đã fix + AUTO LOOT)
-  Tab:  MOVE • FARM • TP ITEM • TP ORE • LOOT • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
-  - ESP, TP Item, TP Ore giờ là 3 tab riêng
-  - Tự lưu config (nếu executor có writefile)
-  - Phím ẩn/hiện GUI mặc định: RightShift
-  - Vehicle Fly (C, tab MOVE): dời cả model xe bằng PivotTo, lái A/D • Giảm Lag 4 mức (F, tab MISC)
-  - Auto Loot (F4, tab LOOT): gửi lệnh Pickup tới server cho item trong bán kính
+  👽 ALIEN MANGO 🥭  V5
+  - GUI nâng cấp: cửa sổ lớn hơn, thanh bên có nhóm + cuộn, tiêu đề trang,
+    hàng bật có viền sáng, nút nổi kéo được
+  - AUTO LOOT: chọn item cần nhặt (list riêng, thêm bằng tên / con trỏ / quét Items)
+  - XE BAY: tách ra tab riêng
+  Tab: MOVE • XE BAY • FARM • LOOT • BÁN • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
 =====================================================================
 ]]
 
@@ -23,7 +22,6 @@ local Lighting          = svc("Lighting")
 local CoreGui           = svc("CoreGui")
 local HttpService       = svc("HttpService")
 local VirtualUser       = svc("VirtualUser")
-local VIM               = svc("VirtualInputManager")
 
 -- Gỡ bản cũ nếu chạy lại script (tránh GUI / phím bị nhân đôi)
 local genv = (getgenv and getgenv()) or _G
@@ -43,20 +41,22 @@ local function getHum() local c = getChar() return c and c:FindFirstChildOfClass
 local function getRoot() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
 
 -- ================= CONFIG =================
-local FILE = "AlienMango_V4.json"
+local FILE = "AlienMango_V5.json"
 local CanFS = (writefile and readfile and isfile) and true or false
 local PLACE = tostring(game.PlaceId)
 
 local Config = {
 	keys = {}, values = {}, options = {},
-	lists = {bring = {"Common Scrap"}, ore = {}},
-	points = {}, accent = 1, bringName = "Common Scrap", toolName = "",
+	lists = {bring = {"Common Scrap"}, loot = {}},
+	points = {}, accent = 1, bringName = "Common Scrap",
 }
 
 if CanFS then
 	pcall(function()
-		-- đọc config V4, nếu chưa có thì thử đọc config V3 cũ
-		local f = isfile(FILE) and FILE or (isfile("AlienMango_V3.json") and "AlienMango_V3.json" or nil)
+		local f
+		for _, n in ipairs({FILE, "AlienMango_V4.json", "AlienMango_V3.json"}) do
+			if isfile(n) then f = n break end
+		end
 		if f then
 			local data = HttpService:JSONDecode(readfile(f))
 			if type(data) == "table" then
@@ -70,10 +70,9 @@ for _, k in ipairs({"keys", "values", "options", "points"}) do
 end
 if type(Config.lists) ~= "table" then Config.lists = {} end
 if type(Config.lists.bring) ~= "table" then Config.lists.bring = {"Common Scrap"} end
-if type(Config.lists.ore) ~= "table" then Config.lists.ore = {} end
+if type(Config.lists.loot) ~= "table" then Config.lists.loot = {} end
 if type(Config.points[PLACE]) ~= "table" then Config.points[PLACE] = {} end
 if type(Config.bringName) ~= "string" then Config.bringName = "Common Scrap" end
-if type(Config.toolName) ~= "string" then Config.toolName = "" end
 
 local function flushConfig()
 	if not CanFS then return end
@@ -88,25 +87,25 @@ local function saveConfig()
 	task.delay(0.7, function() if t == saveTok then flushConfig() end end)
 end
 
-local bringList, oreList, points = Config.lists.bring, Config.lists.ore, Config.points[PLACE]
-local bringName = Config.bringName
-local toolName = Config.toolName
+local lootList, points = Config.lists.loot, Config.points[PLACE]
 
 -- Giá trị số (slider)
 local D = {
-	flySpeed = 50, runSpeed = 40, digDelay = 0.1,
-	aimRange = 200, aimSmooth = 1, aimFov = 600,
-	mineRadius = 25, mineDelay = 0.2, bringInterval = 1, aimPartIdx = 1,
+	flySpeed = 50, runSpeed = 40,
+	aimRange = 200, aimSmooth = 1, aimFov = 600, aimPartIdx = 1,
 	espRange = 150, espMax = 60, espMode = 1, espSize = 13,
-	kaRange = 15, kaDelay = 0.15, escapeHp = 40, uiScale = 1,
+	escapeHp = 40, uiScale = 1,
 	lagLevel = 2, vflySpeed = 80,
-	lootRadius = 15, lootDelay = 0.2,
+	lootRadius = 15, lootDelay = 0.2, lootMode = 1,
+	sellDelay = 3, sellRange = 60,
 }
 local S = {}
 for k, v in pairs(D) do
 	local sv = Config.values[k]
 	S[k] = (type(sv) == "number") and sv or v
 end
+if S.espMode > 2 then S.espMode = 1 end
+if S.lootMode > 2 then S.lootMode = 1 end
 
 -- ================= THEME =================
 local Accents = {
@@ -121,12 +120,12 @@ local rainbowIdx = #Accents
 local accIdx = (type(Config.accent) == "number" and Accents[Config.accent]) and Config.accent or 1
 
 local Theme = {
-	Bg        = Color3.fromRGB(13, 13, 21),
-	Side      = Color3.fromRGB(19, 19, 30),
-	Header    = Color3.fromRGB(24, 24, 38),
-	Item      = Color3.fromRGB(30, 30, 46),
-	ItemHover = Color3.fromRGB(42, 42, 64),
-	Input     = Color3.fromRGB(12, 12, 20),
+	Bg        = Color3.fromRGB(12, 12, 20),
+	Side      = Color3.fromRGB(18, 18, 29),
+	Header    = Color3.fromRGB(23, 23, 37),
+	Item      = Color3.fromRGB(29, 29, 45),
+	ItemHover = Color3.fromRGB(41, 41, 63),
+	Input     = Color3.fromRGB(11, 11, 19),
 	Line      = Color3.fromRGB(62, 62, 92),
 	Text      = Color3.fromRGB(238, 238, 250),
 	SubText   = Color3.fromRGB(135, 135, 168),
@@ -172,24 +171,24 @@ end
 local orderOf = {}
 local function ord(page) orderOf[page] = (orderOf[page] or 0) + 1 return orderOf[page] end
 
--- Thẻ (card) chuẩn cho mọi hàng
+-- trả về (frame, stroke)
 local function card(parent, h, order)
 	local f = new("Frame", {Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = Theme.Item, BorderSizePixel = 0,
 		LayoutOrder = order}, parent)
 	corner(f, 9)
-	stroke(f, Theme.Line, 1, 0.7)
-	return f
+	local st = stroke(f, Theme.Line, 1, 0.7)
+	return f, st
 end
 
--- Chức năng dùng chung giữa các tab (để ít biến local ở scope chính)
 local Fx = {}
 
 -- ================= WINDOW =================
-local W, H = 640, 430
-local HEAD, FOOT = 44, 30
+local W, H = 700, 460
+local HEAD, FOOT = 46, 30
+local SIDE_W = 150
 
 local ScreenGui = new("ScreenGui", {
-	Name = "AlienMangoV4", ResetOnSpawn = false,
+	Name = "AlienMangoV5", ResetOnSpawn = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999,
 })
 if syn and syn.protect_gui then pcall(syn.protect_gui, ScreenGui) end
@@ -205,20 +204,19 @@ local mainStroke = stroke(Main, Color3.new(1, 1, 1), 1.5, 0.3)
 local mainGrad = bindGrad(new("UIGradient", {Rotation = 45}, mainStroke))
 
 local Header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundColor3 = Theme.Header, BorderSizePixel = 0}, Main)
--- đường gradient mảnh dưới header
 local headLine = new("Frame", {Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2),
 	BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, Header)
 bindGrad(new("UIGradient", {}, headLine))
 
 local Title = new("TextLabel", {
-	Size = UDim2.new(0, 150, 1, 0), Position = UDim2.new(0, 16, 0, 0), BackgroundTransparency = 1,
-	Text = "👽 Alien Mango v1.1 🥭", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-	TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.new(0, 160, 1, 0), Position = UDim2.new(0, 16, 0, 0), BackgroundTransparency = 1,
+	Text = "👽 Alien Mango 🥭", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+	TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left,
 }, Header)
 local titleGrad = bindGrad(new("UIGradient", {}, Title))
 
-local pill = new("TextLabel", {Size = UDim2.new(0, 30, 0, 18), Position = UDim2.new(0, 172, 0.5, -9),
-	BackgroundColor3 = Color3.new(1, 1, 1), Text = "V4", TextColor3 = Color3.new(1, 1, 1),
+local pill = new("TextLabel", {Size = UDim2.new(0, 30, 0, 18), Position = UDim2.new(0, 180, 0.5, -9),
+	BackgroundColor3 = Color3.new(1, 1, 1), Text = "V5", TextColor3 = Color3.new(1, 1, 1),
 	Font = Enum.Font.GothamBold, TextSize = 11}, Header)
 corner(pill, 9)
 bindGrad(new("UIGradient", {}, pill))
@@ -257,19 +255,30 @@ do
 	end))
 end
 
-local Side = new("Frame", {Position = UDim2.new(0, 8, 0, HEAD + 8), Size = UDim2.new(0, 136, 1, -(HEAD + FOOT + 16)),
-	BackgroundColor3 = Theme.Side, BorderSizePixel = 0}, Main)
+-- Thanh bên (cuộn được, có nhóm)
+local Side = new("ScrollingFrame", {Position = UDim2.new(0, 8, 0, HEAD + 8), Size = UDim2.new(0, SIDE_W, 1, -(HEAD + FOOT + 16)),
+	BackgroundColor3 = Theme.Side, BorderSizePixel = 0, ScrollBarThickness = 2, CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y}, Main)
 corner(Side, 10)
 stroke(Side, Theme.Line, 1, 0.75)
-new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, Side)
-new("UIPadding", {PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6)}, Side)
+bindAccent(Side, "ScrollBarImageColor3")
+new("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder}, Side)
+new("UIPadding", {PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6)}, Side)
 
-local Content = new("Frame", {Position = UDim2.new(0, 152, 0, HEAD + 8), Size = UDim2.new(1, -160, 1, -(HEAD + FOOT + 16)),
+local CX = SIDE_W + 16
+local Content = new("Frame", {Position = UDim2.new(0, CX, 0, HEAD + 8), Size = UDim2.new(1, -(CX + 8), 1, -(HEAD + FOOT + 16)),
 	BackgroundTransparency = 1, ClipsDescendants = true}, Main)
 
--- Toast (thông báo nhỏ phía dưới)
+local PageTitle = new("TextLabel", {Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Text = "",
+	TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 16,
+	TextXAlignment = Enum.TextXAlignment.Left}, Content)
+new("UIPadding", {PaddingLeft = UDim.new(0, 4)}, PageTitle)
+bindGrad(new("UIGradient", {}, PageTitle))
+local PAGE_TOP = 28
+
+-- Toast
 local Toast = new("TextLabel", {
-	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 76, 1, -FOOT - 8), Size = UDim2.new(0, 0, 0, 28),
+	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 80, 1, -FOOT - 8), Size = UDim2.new(0, 0, 0, 28),
 	AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Theme.Header, BackgroundTransparency = 1,
 	TextTransparency = 1, Text = "", TextColor3 = Theme.Text, Font = Enum.Font.GothamMedium,
 	TextSize = 12, ZIndex = 50,
@@ -294,7 +303,7 @@ local function toast(msg)
 end
 
 -- ================= TABS =================
-local pages, tabBtns, tabInd, tabOrder, activeTab = {}, {}, {}, 0, nil
+local pages, tabBtns, tabInd, tabNames, tabOrder, activeTab = {}, {}, {}, {}, 0, nil
 
 local function refreshTabs()
 	for n, btn in pairs(tabBtns) do
@@ -311,23 +320,26 @@ local function switchTab(name)
 	local prev = activeTab
 	activeTab = name
 	for n, p in pairs(pages) do p.Visible = (n == name) end
+	PageTitle.Text = tabNames[name] or name
 	if prev ~= name and pages[name] then
-		pages[name].Position = UDim2.new(0, 14, 0, 0)
-		tween(pages[name], {Position = UDim2.new(0, 0, 0, 0)}, 0.18)
+		pages[name].Position = UDim2.new(0, 14, 0, PAGE_TOP)
+		tween(pages[name], {Position = UDim2.new(0, 0, 0, PAGE_TOP)}, 0.18)
 	end
 	refreshTabs()
 end
 
-local function tabSeparator(text)
-	new("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "  " .. text,
-		TextColor3 = Theme.Line, Font = Enum.Font.GothamBold, TextSize = 9,
-		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = tabOrder * 10 + 5}, Side)
+local function sideLabel(text)
+	tabOrder = tabOrder + 1
+	new("TextLabel", {Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "  " .. text,
+		TextColor3 = Theme.SubText, TextTransparency = 0.25, Font = Enum.Font.GothamBold, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = tabOrder * 10}, Side)
 end
 
 local function newTab(name, icon, label)
 	tabOrder = tabOrder + 1
+	tabNames[name] = icon .. "  " .. label
 	local btn = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
 		Text = "  " .. icon .. "  " .. label, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold,
 		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = tabOrder * 10,
 	}, Side)
@@ -343,7 +355,8 @@ local function newTab(name, icon, label)
 	tabInd[name] = ind
 
 	local page = new("ScrollingFrame", {
-		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+		Position = UDim2.new(0, 0, 0, PAGE_TOP), Size = UDim2.new(1, 0, 1, -PAGE_TOP),
+		BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
 		AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), Visible = false,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 	}, Content)
@@ -413,9 +426,17 @@ local function section(page, text)
 	local bar = new("Frame", {Size = UDim2.new(0, 3, 0, 12), Position = UDim2.new(0, 2, 0.5, -6), BorderSizePixel = 0}, f)
 	corner(bar, 2)
 	bindAccent(bar, "BackgroundColor3")
-	new("TextLabel", {Size = UDim2.new(1, -14, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1,
-		Text = text, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold, TextSize = 11,
-		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, f)
+	local lb = new("TextLabel", {Size = UDim2.new(0, 10, 1, 0), AutomaticSize = Enum.AutomaticSize.X, Position = UDim2.new(0, 12, 0, 0),
+		BackgroundTransparency = 1, Text = text, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold, TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left}, f)
+	-- đường kẻ mờ sau tiêu đề
+	local line = new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 0.5, 0), BackgroundColor3 = Theme.Line,
+		BackgroundTransparency = 0.6, BorderSizePixel = 0, ZIndex = 0}, f)
+	line.Size = UDim2.new(1, -4, 0, 1)
+	lb.BackgroundColor3 = Theme.Bg
+	lb.BackgroundTransparency = 0
+	lb.ZIndex = 2
+	new("UIPadding", {PaddingRight = UDim.new(0, 6)}, lb)
 	return f
 end
 
@@ -438,7 +459,8 @@ local function addToggle(page, id, label, cfg)
 		State[id] = sv and true or false
 	end
 
-	local row = card(page, 38, ord(page))
+	local row, rowSt = card(page, 38, ord(page))
+	t.st = rowSt
 	local trk = new("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(0, 10, 0.5, -10),
 		BackgroundColor3 = Theme.Off, BorderSizePixel = 0}, row)
 	corner(trk, 10)
@@ -460,6 +482,7 @@ local function addToggle(page, id, label, cfg)
 		local on = State[id]
 		tween(trk, {BackgroundColor3 = on and Theme.Accent or Theme.Off}, 0.15)
 		tween(knob, {Position = on and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)}, 0.15)
+		tween(rowSt, {Color = on and Theme.Accent or Theme.Line, Transparency = on and 0.35 or 0.7}, 0.15)
 		hit.TextColor3 = on and Color3.new(1, 1, 1) or Theme.Text
 	end
 	t.refresh = refresh
@@ -650,14 +673,14 @@ local function addListRow(list, order, text, onPick, actions, onDelete)
 		b.MouseButton1Click:Connect(act.fn)
 	end
 	if onDelete then
-	local del = new("TextButton", {
-		Size = UDim2.new(0, 26, 0, 22), Position = UDim2.new(1, -30, 0.5, -11), BackgroundColor3 = Theme.Danger,
-		BackgroundTransparency = 0.3, Text = "✕", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-		TextSize = 11, AutoButtonColor = false,
-	}, row)
-	corner(del, 6)
-	hover(del, 0.3, 0, "BackgroundTransparency")
-	del.MouseButton1Click:Connect(onDelete)
+		local del = new("TextButton", {
+			Size = UDim2.new(0, 26, 0, 22), Position = UDim2.new(1, -30, 0.5, -11), BackgroundColor3 = Theme.Danger,
+			BackgroundTransparency = 0.3, Text = "✕", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+			TextSize = 11, AutoButtonColor = false,
+		}, row)
+		corner(del, 6)
+		hover(del, 0.3, 0, "BackgroundTransparency")
+		del.MouseButton1Click:Connect(onDelete)
 	end
 end
 
@@ -880,38 +903,6 @@ local function setAntiAFK(on)
 	end
 end
 
--- ---------- Auto dig ----------
-local function equipTool()
-	local char, hum = getChar(), getHum()
-	if not char or not hum then return nil end
-	local want = toolName:lower()
-	local function ok(t) return want == "" or t.Name:lower():find(want, 1, true) ~= nil end
-	local tool = char:FindFirstChildOfClass("Tool")
-	if tool and ok(tool) then return tool end
-	local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-	if bp then
-		for _, t in ipairs(bp:GetChildren()) do
-			if t:IsA("Tool") and ok(t) then hum:EquipTool(t) return t end
-		end
-	end
-	return tool
-end
-
-local function digOnce()
-	local tool = equipTool()
-	if not tool then return end
-	pcall(function() tool:Activate() end)
-	if State.digMouse then
-		pcall(function()
-			local cam = workspace.CurrentCamera
-			local x, y = cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2
-			VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-			task.wait()
-			VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-		end)
-	end
-end
-
 -- ---------- Auto aim ----------
 local AimParts = {"Head", "HumanoidRootPart"}
 local npcList, npcConn, aimConn = {}, nil, nil
@@ -970,12 +961,7 @@ local function startAim()
 	end)
 end
 
--- ---------- Tìm item / ore ----------
-local function resolveTarget(inst)
-	if inst and (inst:IsA("Model") or inst:IsA("BasePart") or inst:IsA("Tool")) then return inst end
-	return nil
-end
-
+-- ---------- Vị trí vật ----------
 local function getPos(inst)
 	if inst:IsA("Model") then return inst:GetPivot().Position end
 	if inst:IsA("Tool") then
@@ -985,167 +971,7 @@ local function getPos(inst)
 	return inst.Position
 end
 
-local function findItems(name, partial)
-	local wanted = name:lower()
-	local char = getChar()
-	local playerChars = {}
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then playerChars[#playerChars + 1] = p.Character end
-	end
-
-	local function match(v)
-		if v == nil then return false end
-		local s = tostring(v):lower()
-		if partial then return s:find(wanted, 1, true) ~= nil end
-		return s == wanted
-	end
-
-	local found = {}
-	local function add(inst)
-		if not inst or inst == workspace then return end
-		if char and inst:IsDescendantOf(char) then return end
-		for _, c in ipairs(playerChars) do
-			if inst == c or inst:IsDescendantOf(c) then return end
-		end
-		if inst:IsA("Model") and #inst:GetDescendants() > 300 then return end
-		found[inst] = true
-	end
-
-	local deep = State.deepSearch
-	local desc = workspace:GetDescendants()
-	for i, d in ipairs(desc) do
-		if i % 4000 == 0 then RunService.Heartbeat:Wait() end -- tránh đơ game
-		if match(d.Name) then add(resolveTarget(d)) end
-		if deep then
-			if d:IsA("ValueBase") then
-				local okv, v = pcall(function() return d.Value end)
-				if okv and match(v) then add(resolveTarget(d.Parent)) end
-			elseif d:IsA("TextLabel") or d:IsA("TextButton") then
-				if match(d.Text) then
-					add(d:FindFirstAncestorOfClass("Tool") or d:FindFirstAncestorOfClass("Model")
-						or d:FindFirstAncestorWhichIsA("BasePart"))
-				end
-			elseif d:IsA("Model") or d:IsA("BasePart") or d:IsA("Tool") then
-				for _, val in pairs(d:GetAttributes()) do
-					if match(val) then add(d) break end
-				end
-			end
-		end
-	end
-
-	local list = {}
-	for inst in pairs(found) do
-		local nested, anc = false, inst.Parent
-		while anc and anc ~= workspace do
-			if found[anc] then nested = true break end
-			anc = anc.Parent
-		end
-		if not nested then list[#list + 1] = inst end
-	end
-	return list
-end
-
-local function searchItems(name)
-	local list = findItems(name, false)
-	if #list == 0 and #name >= 2 then list = findItems(name, true) end
-	return list
-end
-
-
--- ---------- Tìm ORE (chỉ ore: khớp ĐÚNG tên, bỏ Tool / nhân vật / NPC) ----------
-local function findOre(name, partial)
-	local wanted = trim(name):lower()
-	if wanted == "" then return {} end
-	local playerChars = {}
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then playerChars[#playerChars + 1] = p.Character end
-	end
-	local found = {}
-	for i, d in ipairs(workspace:GetDescendants()) do
-		if i % 4000 == 0 then RunService.Heartbeat:Wait() end
-		local dn = (d:IsA("Model") or d:IsA("BasePart")) and d.Name:lower()
-		if dn and (dn == wanted or (partial and dn:find(wanted, 1, true))) then
-			local bad = d:FindFirstAncestorOfClass("Tool") ~= nil
-				or (d:IsA("Model") and d:FindFirstChildOfClass("Humanoid") ~= nil)
-			if not bad then
-				for _, c in ipairs(playerChars) do
-					if d == c or d:IsDescendantOf(c) then bad = true break end
-				end
-			end
-			if not bad then
-				local a = d.Parent
-				while a and a ~= workspace do
-					if a:FindFirstChildOfClass("Humanoid") then bad = true break end
-					a = a.Parent
-				end
-			end
-			if not bad then found[d] = true end
-		end
-	end
-	local list = {}
-	for inst in pairs(found) do
-		local nested, anc = false, inst.Parent
-		while anc and anc ~= workspace do
-			if found[anc] then nested = true break end
-			anc = anc.Parent
-		end
-		if not nested then list[#list + 1] = inst end
-	end
-	return list
-end
-
-local function tpToOre(name)
-	local root = getRoot()
-	if not root then return end
-	local list = findOre(name)
-	local approx = false
-	if #list == 0 then list = findOre(name, true) approx = #list > 0 end
-	root = getRoot()
-	if not root then return end
-	local best, bestD, nearest, nearestD
-	for _, inst in ipairs(list) do
-		local okp, pos = pcall(getPos, inst)
-		if okp and pos then
-			local d = (pos - root.Position).Magnitude
-			if not nearestD or d < nearestD then nearest, nearestD = pos, d end
-			if d > 6 and (not bestD or d < bestD) then best, bestD = pos, d end
-		end
-	end
-	local dest = best or nearest
-	if dest then
-		teleportToCFrame(CFrame.new(dest + Vector3.new(0, 4, 0)))
-		toast("TP ore: " .. name .. "  (" .. #list .. ")" .. (approx and " ~gần đúng" or ""))
-	else
-		toast("Không thấy ore: " .. name .. " (gõ đúng tên)")
-	end
-end
-
--- TP tới ore gần nhất trong cả list ORE
-function Fx.tpNearestOre()
-	if #oreList == 0 then toast("List ORE trống") return end
-	local bestPos, bestD
-	for _, n in ipairs(oreList) do
-		local ores = findOre(n)
-		if #ores == 0 then ores = findOre(n, true) end
-		local root = getRoot()
-		if not root then return end
-		for _, inst in ipairs(ores) do
-			local okp, pos = pcall(getPos, inst)
-			if okp and pos then
-				local d = (pos - root.Position).Magnitude
-				if d > 6 and (not bestD or d < bestD) then bestPos, bestD = pos, d end
-			end
-		end
-	end
-	if bestPos then
-		teleportToCFrame(CFrame.new(bestPos + Vector3.new(0, 4, 0)))
-		toast("TP ore gần nhất (" .. math.floor(bestD) .. " m)")
-	else
-		toast("Không thấy ore nào trong list")
-	end
-end
-
--- ---------- Quét tên ore / item ----------
+-- ---------- Thêm tên vật dưới con trỏ vào list ----------
 local IgnoreNames = {
 	Part = true, Baseplate = true, Terrain = true, Handle = true, SpawnLocation = true, Camera = true,
 	HumanoidRootPart = true, Head = true, Torso = true, UpperTorso = true, LowerTorso = true, Model = true,
@@ -1160,11 +986,17 @@ local function addUnique(store, name)
 	return true
 end
 
--- Thêm tên vật đang trỏ chuột vào một list (ORE hoặc ITEM)
 function Fx.pickUnderMouse(store, render)
 	local t = Mouse.Target
 	if not t then toast("Không có vật nào dưới con trỏ") return end
 	local n = t.Name
+	-- vật nằm trong workspace.Items → lấy tên con trực tiếp của Items
+	local items = workspace:FindFirstChild("Items")
+	if items and t:IsDescendantOf(items) then
+		local a = t
+		while a.Parent and a.Parent ~= items do a = a.Parent end
+		n = a.Name
+	end
 	if IgnoreNames[n] then
 		local m = t:FindFirstAncestorOfClass("Model")
 		if m and not Players:GetPlayerFromCharacter(m) then n = m.Name end
@@ -1174,139 +1006,7 @@ function Fx.pickUnderMouse(store, render)
 	if render then render() end
 end
 
--- ---------- Bring / TP item ----------
-local bringBusy = false
-local function bringItems(name, silent)
-	name = name or bringName
-	local root = getRoot()
-	if not root or bringBusy then return 0 end
-	bringBusy = true
-	local okS, list = pcall(searchItems, name)
-	bringBusy = false
-	if not okS then return 0 end
-
-	root = getRoot()
-	if not root then return 0 end
-	local count = 0
-	for _, inst in ipairs(list) do
-		if inst.Parent then
-			local offset = CFrame.new((count % 5 - 2) * 3, 0, -5 - math.floor(count / 5) * 3)
-			local target = root.CFrame * offset
-			local ok = pcall(function()
-				if inst:IsA("Model") then
-					inst:PivotTo(target)
-				elseif inst:IsA("Tool") then
-					local h = inst:FindFirstChild("Handle")
-					if h then h.AssemblyLinearVelocity = Vector3.zero h.CFrame = target end
-				else
-					inst.AssemblyLinearVelocity = Vector3.zero
-					inst.CFrame = target
-				end
-			end)
-			if ok then count = count + 1 end
-		end
-	end
-	if not silent then
-		toast(count > 0 and ("Bring " .. count .. ": " .. name) or ("Không thấy: " .. name))
-	end
-	return count
-end
-
-local function tpToItem(name)
-	name = name or bringName
-	local root = getRoot()
-	if not root then return end
-	local list = searchItems(name)
-	root = getRoot()
-	if not root then return end
-	local best, bestD, nearest, nearestD
-	for _, inst in ipairs(list) do
-		local pos = getPos(inst)
-		if pos then
-			local d = (pos - root.Position).Magnitude
-			if not nearestD or d < nearestD then nearest, nearestD = pos, d end
-			if d > 6 and (not bestD or d < bestD) then best, bestD = pos, d end
-		end
-	end
-	local dest = best or nearest
-	if dest then
-		teleportToCFrame(CFrame.new(dest + Vector3.new(0, 4, 0)))
-		toast("TP: " .. name .. "  (" .. #list .. ")")
-	else
-		toast("Không thấy: " .. name)
-	end
-end
-
--- TP tới item gần nhất trong cả list ITEM
-function Fx.tpNearestItem()
-	if #bringList == 0 then toast("List ITEM trống") return end
-	local bestPos, bestD
-	for _, n in ipairs(bringList) do
-		local okS, items = pcall(searchItems, n)
-		local root = getRoot()
-		if not root then return end
-		if okS then
-			for _, inst in ipairs(items) do
-				local okp, pos = pcall(getPos, inst)
-				if okp and pos then
-					local d = (pos - root.Position).Magnitude
-					if d > 6 and (not bestD or d < bestD) then bestPos, bestD = pos, d end
-				end
-			end
-		end
-	end
-	if bestPos then
-		teleportToCFrame(CFrame.new(bestPos + Vector3.new(0, 4, 0)))
-		toast("TP item gần nhất (" .. math.floor(bestD) .. " m)")
-	else
-		toast("Không thấy item nào trong list")
-	end
-end
-
--- ---------- Auto mine ----------
-local mineTargets, mineScan = {}, 0
-local function rescanOre()
-	local res = {}
-	for _, n in ipairs(oreList) do
-		local ores = findOre(n)
-		if #ores == 0 then ores = findOre(n, true) end
-		for _, inst in ipairs(ores) do
-			if getPos(inst) then res[#res + 1] = inst end
-		end
-	end
-	mineTargets = res
-	mineScan = os.clock()
-end
-local function nearestOre()
-	local root = getRoot()
-	if not root then return nil end
-	if os.clock() - mineScan > 1.5 then rescanOre() end
-	local bp, bd
-	for _, inst in ipairs(mineTargets) do
-		if inst.Parent then
-			local p = getPos(inst)
-			if p then
-				local d = (p - root.Position).Magnitude
-				if not bd or d < bd then bp, bd = p, d end
-			end
-		end
-	end
-	return bp, bd
-end
-local function mineStep()
-	if #oreList == 0 then digOnce() return end
-	local pos, d = nearestOre()
-	if not pos then return end
-	if d <= S.mineRadius then
-		local cam = workspace.CurrentCamera
-		if cam then cam.CFrame = CFrame.new(cam.CFrame.Position, pos) end
-		digOnce()
-	elseif State.mineTP then
-		teleportToCFrame(CFrame.new(pos + Vector3.new(0, 4, 0)))
-	end
-end
-
--- ---------- ESP tên item / ore (nhãn gọn, không chồng nhau, có số mét) ----------
+-- ---------- ESP tên item (nhãn gọn, không chồng nhau, có số mét) ----------
 local ESP = {gui = nil, map = {}, items = {}, rconn = nil, on = false, filter = ""}
 do
 	local SkipESP = {Terrain = true, Baseplate = true, SpawnLocation = true, Camera = true}
@@ -1342,7 +1042,6 @@ do
 	end
 	local function esc(t) return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 
-	-- Tên có nằm trong list (ORE / ITEM) không
 	local function inList(store, n)
 		local l = n:lower()
 		for _, s in ipairs(store) do
@@ -1410,8 +1109,7 @@ do
 					seen[c] = true
 					local n = c.Name
 					local pass = not SkipESP[n] and (filter == "" or n:lower():find(filter, 1, true))
-					if pass and mode == 2 then pass = inList(oreList, n) end
-					if pass and mode == 3 then pass = inList(bringList, n) end
+					if pass and mode == 2 then pass = inList(lootList, n) end
 					if pass and not inPlayer(c) then
 						local okp, pos = pcall(getPos, c)
 						if okp and pos then
@@ -1425,7 +1123,6 @@ do
 		if not ESP.on then return end
 		table.sort(list, function(a, b) return a.dist < b.dist end)
 
-		-- Gộp các vật cùng tên nằm sát nhau thành 1 nhãn "Tên ×N"
 		local clusters = {}
 		for _, e in ipairs(list) do
 			local n, merged = e.inst.Name, false
@@ -1473,7 +1170,6 @@ do
 		ESP.items = items
 	end
 
-	-- Mỗi khung hình: đặt vị trí nhãn, cập nhật số mét, đẩy nhãn lên nếu bị chồng
 	function ESP.render()
 		local cam, root = workspace.CurrentCamera, getRoot()
 		if not cam or not root then return end
@@ -1597,7 +1293,6 @@ do
 		return cur, mx or Hp.peak
 	end
 
-	-- Tỉ lệ máu thấp nhất giữa Humanoid và máu tùy chỉnh (1 = đầy)
 	function Hp.ratio()
 		local best
 		local h = getHum()
@@ -1687,7 +1382,6 @@ do
 		if r then Safe.cf = r.CFrame toast("Đã đặt điểm an toàn tại đây") end
 	end
 
-	-- Máu thấp hơn ngưỡng (Humanoid hoặc máu tùy chỉnh của game) → TP về điểm an toàn
 	function Safe.tick()
 		local r = getRoot()
 		if not r or not Safe.cf then return end
@@ -1719,7 +1413,7 @@ do
 			task.spawn(function()
 				local r = c:WaitForChild("HumanoidRootPart", 10)
 				if r and Safe.deathCF then
-					task.wait(0.6) -- chờ game đặt xong chỗ hồi sinh
+					task.wait(0.6)
 					r.CFrame = Safe.deathCF + Vector3.new(0, 3, 0)
 					Safe.deathCF = nil
 					toast("Về chỗ vừa chết")
@@ -1728,73 +1422,6 @@ do
 		end
 	end))
 	if getChar() then task.spawn(hookChar, getChar()) end
-end
-
--- ---------- Kill Aura (đánh NPC trong phạm vi bằng tool đang cầm) ----------
-local KA = {set = {}, conn = nil}
-do
-	local function add(h)
-		if h:IsA("Humanoid") then
-			local m = h.Parent
-			if m and m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then KA.set[h] = true end
-		end
-	end
-
-	function KA.stop()
-		if KA.conn then KA.conn:Disconnect() KA.conn = nil end
-		KA.set = {}
-	end
-
-	function KA.start()
-		KA.stop()
-		local conn = workspace.DescendantAdded:Connect(add)
-		KA.conn = conn
-		task.spawn(function()
-			for i, d in ipairs(workspace:GetDescendants()) do
-				if KA.conn ~= conn then return end
-				add(d)
-				if i % 3000 == 0 then RunService.Heartbeat:Wait() end
-			end
-		end)
-	end
-
-	function KA.tick()
-		local root, hum = getRoot(), getHum()
-		if not root or not hum or hum.Health <= 0 then return end
-		local tool = equipTool()
-		local handle = tool and tool:FindFirstChild("Handle")
-		local hits, nearest, nd = 0, nil, nil
-		for h in pairs(KA.set) do
-			local m = h.Parent
-			if not m then
-				KA.set[h] = nil
-			elseif h.Health > 0 then
-				local part = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
-				if part then
-					local d = (part.Position - root.Position).Magnitude
-					if d <= S.kaRange then
-						if not nd or d < nd then nearest, nd = part, d end
-						if State.kaTouch and handle and handle:IsA("BasePart") and firetouchinterest then
-							pcall(function()
-								firetouchinterest(handle, part, 0)
-								firetouchinterest(handle, part, 1)
-							end)
-						end
-						hits = hits + 1
-						if hits >= 8 then break end
-					end
-				end
-			end
-		end
-		if hits > 0 and nearest then
-			if State.kaFace then
-				local np = nearest.Position
-				local flat = Vector3.new(np.X, root.Position.Y, np.Z)
-				if (flat - root.Position).Magnitude > 0.1 then root.CFrame = CFrame.lookAt(root.Position, flat) end
-			end
-			if tool then pcall(function() tool:Activate() end) end
-		end
-	end
 end
 
 -- ---------- Points ----------
@@ -1818,7 +1445,6 @@ end
 local function teleportBack()
 	if prevCF then teleportToCFrame(prevCF) toast("Quay lại vị trí trước") end
 end
-
 
 -- ---------- Chat ----------
 local function sendChat(msg)
@@ -1846,7 +1472,6 @@ do
 	local LIGHT    = {PointLight = true, SpotLight = true, SurfaceLight = true}
 	local POST     = {BlurEffect = true, BloomEffect = true, SunRaysEffect = true, DepthOfFieldEffect = true}
 
-	-- đổi thuộc tính và nhớ giá trị cũ để khôi phục khi tắt
 	local function setp(inst, prop, val)
 		local ok, old = pcall(function() return inst[prop] end)
 		if not ok or old == val then return end
@@ -1859,14 +1484,13 @@ do
 	function Lag.applyInst(inst, lv)
 		if inst:IsA("Terrain") then return end
 		if inst:IsA("BasePart") then
-			setp(inst, "CastShadow", false)                                  -- mức 1+
+			setp(inst, "CastShadow", false)
 			if lv >= 3 then
 				setp(inst, "Material", Enum.Material.SmoothPlastic)
 				setp(inst, "Reflectance", 0)
 			end
 			if lv >= 4 then
 				if inst:IsA("MeshPart") then setp(inst, "RenderFidelity", Enum.RenderFidelity.Performance) end
-				-- ẩn phụ kiện của người chơi khác
 				local acc = inst:FindFirstAncestorOfClass("Accessory")
 				if acc then
 					local ch = acc:FindFirstAncestorOfClass("Model")
@@ -1878,7 +1502,7 @@ do
 			return
 		end
 		local cn = inst.ClassName
-		if POST[cn] then setp(inst, "Enabled", false) return end            -- mức 1+
+		if POST[cn] then setp(inst, "Enabled", false) return end
 		if lv >= 2 and PARTICLE[cn] then setp(inst, "Enabled", false) return end
 		if lv >= 2 and cn == "Explosion" then setp(inst, "Visible", false) return end
 		if lv >= 3 and LIGHT[cn] then setp(inst, "Enabled", false) return end
@@ -1906,7 +1530,7 @@ do
 						Lag.deco = gethiddenproperty and gethiddenproperty(t, "Decoration")
 						Lag.decoSet = true
 					end
-					sethiddenproperty(t, "Decoration", false)   -- tắt cỏ
+					sethiddenproperty(t, "Decoration", false)
 				end)
 			end
 		end
@@ -1947,7 +1571,6 @@ do
 		local tok = Lag.tok
 		Lag.applyGlobal(lv)
 
-		-- vật thể mới xuất hiện cũng được giảm lag ngay
 		for _, root in ipairs({workspace, Lighting}) do
 			Lag.conns[#Lag.conns + 1] = root.DescendantAdded:Connect(function(d)
 				if Lag.tok == tok then pcall(Lag.applyInst, d, lv) end
@@ -1961,7 +1584,7 @@ do
 					if Lag.tok ~= tok then return end
 					pcall(Lag.applyInst, d, lv)
 					n = n + 1
-					if n % 1500 == 0 then RunService.Heartbeat:Wait() end -- không làm đơ game
+					if n % 1500 == 0 then RunService.Heartbeat:Wait() end
 				end
 			end
 			if Lag.tok == tok then toast("Giảm lag xong • mức " .. lv .. " (" .. LevelName[lv] .. ")") end
@@ -1970,7 +1593,6 @@ do
 
 	function Lag.on()
 		Lag.apply(S.lagLevel)
-		-- đổi mức trong lúc đang bật → tự áp dụng lại
 		startLoop("lagwatch", function()
 			if Lag.level ~= 0 and Lag.level ~= S.lagLevel then Lag.apply(S.lagLevel) end
 		end, function() return 0.4 end)
@@ -1983,11 +1605,8 @@ do
 end
 
 -- ---------- XE BAY (Vehicle Fly) ----------
--- Dời cả model xe bằng PivotTo mỗi khung hình + triệt tiêu vận tốc.
--- W/S: tiến lùi theo camera • Space/Shift: lên/xuống • A/D: xoay xe (hoặc đi ngang nếu tắt "Lái bằng A/D")
 local VF = {conn = nil, nc = nil, anchor = nil, model = nil, parts = {}, scan = 0, touched = {}}
 do
-	-- Tìm "mảnh xe": ghế đang ngồi, hoặc phần xe mà nhân vật bị hàn vào
 	local function findAnchor()
 		local hum, root = getHum(), getRoot()
 		local seat = hum and hum.SeatPart
@@ -2000,13 +1619,12 @@ do
 		return nil
 	end
 
-	-- Lấy model xe ngoài cùng (để dời cả xe, bánh xe đi theo)
 	local function pickModel(anchor)
 		local m = anchor:FindFirstAncestorOfClass("Model")
 		if not m or m == workspace then return nil end
 		local top = m
 		while top.Parent and top.Parent ~= workspace and top.Parent:IsA("Model") do top = top.Parent end
-		if #top:GetDescendants() > 2500 then return m end -- model quá to (cả map) → dùng model gần ghế nhất
+		if #top:GetDescendants() > 2500 then return m end
 		return top
 	end
 
@@ -2055,7 +1673,7 @@ do
 
 			local cam = workspace.CurrentCamera
 			local hum = getHum()
-			local steer = State.vflyCam          -- true = A/D xoay xe
+			local steer = State.vflyCam
 			local d = Vector3.zero
 			local turn = 0
 			if not UIS:GetFocusedTextBox() then
@@ -2072,7 +1690,7 @@ do
 				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
 			end
 			if d.Magnitude == 0 and turn == 0 and hum and hum.MoveDirection.Magnitude > 0 then
-				d = hum.MoveDirection -- mobile
+				d = hum.MoveDirection
 			end
 			if d.Magnitude > 0 then d = d.Unit end
 
@@ -2085,7 +1703,6 @@ do
 
 			if VF.model then VF.model:PivotTo(newcf) else anchor.CFrame = newcf end
 
-			-- triệt tiêu vận tốc: xe không rơi / không lật / không bị game đẩy đi
 			for _, p in ipairs(VF.parts) do
 				if p.Parent then
 					p.AssemblyLinearVelocity = Vector3.zero
@@ -2094,7 +1711,6 @@ do
 			end
 		end)
 
-		-- noclip cho xe (tuỳ chọn)
 		VF.nc = RunService.Stepped:Connect(function()
 			if not State.vflyNoclip then
 				if next(VF.touched) then restoreCollide() end
@@ -2110,8 +1726,8 @@ do
 	end
 end
 
--- ---------- AUTO LOOT (gửi lệnh Pickup tới server cho item trong bán kính) ----------
-local Loot = {remote = nil}
+-- ---------- AUTO LOOT (có chọn item) ----------
+local Loot = {remote = nil, picked = 0}
 do
 	local function lootPart(o)
 		if o:IsA("BasePart") then return o end
@@ -2122,16 +1738,25 @@ do
 		return nil
 	end
 
+	-- chế độ 1: nhặt tất cả • chế độ 2: chỉ item có tên trong list (khớp đúng hoặc chứa)
+	function Loot.wanted(name)
+		if S.lootMode ~= 2 then return true end
+		local l = name:lower()
+		for _, s in ipairs(lootList) do
+			local w = s:lower()
+			if l == w or l:find(w, 1, true) then return true end
+		end
+		return false
+	end
+
 	function Loot.resolve()
 		Loot.remote = nil
-		-- đường dẫn gốc
 		local cur = ReplicatedStorage
 		for _, n in ipairs({"Packages", "_Index", "sleitnick_knit@1.4.6", "knit",
 			"Services", "ToolService", "RE", "Update"}) do
 			cur = cur and cur:FindFirstChild(n)
 		end
 		if cur and cur:IsA("RemoteEvent") then Loot.remote = cur return end
-		-- dự phòng: game đổi version knit thì tự dò lại
 		for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
 			if d:IsA("RemoteEvent") and d.Name == "Update" and d.Parent and d.Parent.Name == "RE"
 				and d.Parent.Parent and d.Parent.Parent.Name == "ToolService" then
@@ -2145,12 +1770,16 @@ do
 		local root = getRoot()
 		local folder = workspace:FindFirstChild("Items")
 		if not root or not folder then return end
+		if S.lootMode == 2 and #lootList == 0 then return end
 		if not Loot.remote or not Loot.remote.Parent then Loot.resolve() end
 		if not Loot.remote then return end
 		for _, item in ipairs(folder:GetChildren()) do
-			local part = lootPart(item)
-			if part and (root.Position - part.Position).Magnitude <= S.lootRadius then
-				pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
+			if Loot.wanted(item.Name) then
+				local part = lootPart(item)
+				if part and (root.Position - part.Position).Magnitude <= S.lootRadius then
+					pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
+					Loot.picked = Loot.picked + 1
+				end
 			end
 		end
 	end
@@ -2162,6 +1791,7 @@ end
 
 -- ---------- MOVE ----------
 do
+sideLabel("DI CHUYỂN")
 local pMove = newTab("MOVE", "🚀", "Di chuyển")
 section(pMove, "DI CHUYỂN")
 addToggle(pMove, "fly",     "Fly",        {key = "E", fn = function(v) if v then startFly() else stopFly() end end})
@@ -2175,60 +1805,24 @@ addSlider(pMove, "runSpeed", "Run speed", 1, 500, 1, 0)
 section(pMove, "TELEPORT")
 addToggle(pMove, "clickTP", "Click TP (bấm là dịch chuyển)", {key = "T", fn = function() end})
 addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = true, default = true})
-
-section(pMove, "XE BAY  (ngồi vào xe rồi bật)")
-addToggle(pMove, "vfly", "Vehicle Fly", {key = "C", fn = function(v) if v then VF.start() else VF.stop() end end})
-addToggle(pMove, "vflyCam", "Lái bằng A/D (A/D xoay xe)", {noKey = true, persist = true, default = true})
-addToggle(pMove, "vflyNoclip", "Xe xuyên vật cản (noclip xe)", {noKey = true, persist = true, default = false})
-addSlider(pMove, "vflySpeed", "Tốc độ xe bay", 5, 60000, 1, 0)
-note(pMove, "W/S tiến lùi theo camera • Space lên • Shift xuống. Bật \"Lái bằng A/D\": A/D xoay xe. Tắt: A/D đi ngang, xe không xoay.", 40)
 end
 
--- ---------- FARM ----------
+-- ---------- XE BAY (tab riêng) ----------
 do
-local pFarm = newTab("FARM", "⛏", "Farm")
-section(pFarm, "AUTO DIG")
-addToggle(pFarm, "autoDig", "Auto Dig", {key = "G", fn = function(v)
-	if v then startLoop("dig", digOnce, function() return S.digDelay end) else stopLoop("dig") end
-end})
-local toolBox = addTextRow(pFarm, "Tên tool (để trống = tool đầu tiên)", toolName, {})
-toolBox.FocusLost:Connect(function()
-	toolName = trim(toolBox.Text)
-	Config.toolName = toolName
-	saveConfig()
-end)
-addToggle(pFarm, "digMouse", "Thêm click chuột giữa màn hình", {noKey = true, persist = true, default = false})
-addSlider(pFarm, "digDelay", "Dig delay (giây)", 0.03, 3, 0.01, 2)
+local pVeh = newTab("VEHICLE", "🚗", "Xe bay")
+section(pVeh, "XE BAY  (ngồi vào xe rồi bật)")
+addToggle(pVeh, "vfly", "Vehicle Fly", {key = "C", fn = function(v) if v then VF.start() else VF.stop() end end})
+section(pVeh, "TUỲ CHỈNH")
+addToggle(pVeh, "vflyCam", "Lái bằng A/D (A/D xoay xe)", {noKey = true, persist = true, default = true})
+addToggle(pVeh, "vflyNoclip", "Xe xuyên vật cản (noclip xe)", {noKey = true, persist = true, default = false})
+addSlider(pVeh, "vflySpeed", "Tốc độ xe bay", 5, 60000, 1, 0)
+note(pVeh, "W/S tiến lùi theo camera • Space lên • Shift xuống. Bật \"Lái bằng A/D\": A/D xoay xe. Tắt: A/D đi ngang, xe không xoay.", 52)
+end
 
-section(pFarm, "AUTO MINE")
-note(pFarm, "Ore lấy từ list ở tab TP ORE. List trống → chỉ đào (Auto Dig) tại chỗ.", 28)
-addToggle(pFarm, "autoMine", "Auto Mine", {key = "Z", fn = function(v)
-	if v then
-		mineScan = 0
-		startLoop("mine", mineStep, function() return S.mineDelay end)
-	else
-		stopLoop("mine")
-	end
-end})
-addToggle(pFarm, "mineTP", "Tự TP tới ore khi ngoài radius", {noKey = true, persist = true, default = false})
-addSlider(pFarm, "mineRadius", "Mine radius (studs)", 1, 500, 1, 0)
-addSlider(pFarm, "mineDelay", "Mine delay (giây)", 0.03, 3, 0.01, 2)
-
-section(pFarm, "KILL AURA  (tự đánh NPC trong phạm vi bằng tool đang cầm)")
-addToggle(pFarm, "killAura", "Kill Aura", {key = "Q", fn = function(v)
-	if v then
-		KA.start()
-		startLoop("ka", KA.tick, function() return S.kaDelay end)
-	else
-		stopLoop("ka")
-		KA.stop()
-	end
-end})
-addToggle(pFarm, "kaFace", "Tự quay mặt về NPC gần nhất", {noKey = true, persist = true, default = true})
-addToggle(pFarm, "kaTouch", "Gửi cú chạm vào NPC (cho vũ khí cận chiến)", {noKey = true, persist = true, default = true})
-addSlider(pFarm, "kaRange", "Phạm vi Kill Aura (studs)", 3, 100, 1, 0)
-addSlider(pFarm, "kaDelay", "Tốc độ đánh (giây / lần)", 0.03, 1, 0.01, 2)
-
+-- ---------- FARM (chỉ còn Auto Aim) ----------
+do
+sideLabel("TỰ ĐỘNG")
+local pFarm = newTab("FARM", "🎯", "Farm")
 section(pFarm, "AUTO AIM NPC")
 addToggle(pFarm, "autoAim", "Auto Aim NPC", {key = "V", fn = function(v) if v then startAim() else stopAim() end end})
 addToggle(pFarm, "aimWall", "Kiểm tra vật cản (wall check)", {noKey = true, persist = true, default = true})
@@ -2236,58 +1830,6 @@ addCycle(pFarm, "aimPartIdx", "Ngắm vào", {"Head", "Thân (RootPart)"})
 addSlider(pFarm, "aimRange", "Aim range (studs)", 10, 2000, 1, 0)
 addSlider(pFarm, "aimFov", "Aim FOV (pixel)", 50, 1500, 10, 0)
 addSlider(pFarm, "aimSmooth", "Độ mượt (1 = khoá cứng)", 0.05, 1, 0.05, 2)
-end
-
--- ---------- TP ITEM ----------
-do
-local pItem = newTab("TPITEM", "📦", "TP Item")
-section(pItem, "BRING / TP THEO TÊN")
-local BringBox, bringBtns = addTextRow(pItem, "Tên / Value item...", bringName, {"BRING", "TP"})
-local function currentBringName()
-	local t = trim(BringBox.Text)
-	if t ~= "" then bringName = t Config.bringName = t saveConfig() end
-	return bringName
-end
-BringBox.FocusLost:Connect(function() BringBox.Text = currentBringName() end)
-bringBtns[1].MouseButton1Click:Connect(function() bringItems(currentBringName()) end)
-bringBtns[2].MouseButton1Click:Connect(function() tpToItem(currentBringName()) end)
-
-section(pItem, "TÙY CHỌN")
-addAction(pItem, "tpNearItem", "TP tới item gần nhất trong list", "I", Fx.tpNearestItem)
-addToggle(pItem, "bringLoop", "Loop Bring", {key = "H", fn = function(v)
-	if v then
-		startLoop("bring", function() bringItems(bringName, true) end, function() return S.bringInterval end)
-	else
-		stopLoop("bring")
-	end
-end})
-addSlider(pItem, "bringInterval", "Bring interval (giây)", 0.2, 5, 0.1, 1)
-addToggle(pItem, "deepSearch", "Tìm sâu (Value / Attribute / Text) - chậm hơn", {noKey = true, persist = true, default = true})
-
-addAction(pItem, "pickItem", "Thêm vật dưới con trỏ vào list ITEM", nil, function() Fx.pickUnderMouse(bringList, Fx.renderBring) end)
-
-section(pItem, "LIST ITEM  (bấm tên = chọn vào ô trên)")
-Fx.renderBring = addNameList(pItem, "Thêm tên item...", bringList,
-	function(name) bringName = name Config.bringName = name BringBox.Text = name saveConfig() end,
-	{
-		{text = "BRING", fn = function(n) bringName = n BringBox.Text = n bringItems(n) end},
-		{text = "TP",    fn = function(n) tpToItem(n) end},
-	})
-end
-
--- ---------- TP ORE ----------
-do
-local pOre = newTab("TPORE", "💎", "TP Ore")
-section(pOre, "TELEPORT ORE")
-addAction(pOre, "tpNearOre", "TP tới ore gần nhất trong list", "O", Fx.tpNearestOre)
-addAction(pOre, "pickOre", "Thêm vật dưới con trỏ vào list ORE", "P", function() Fx.pickUnderMouse(oreList, Fx.renderOre) end)
-note(pOre, "List ORE cũng là list mà Auto Mine (tab FARM) và ESP chế độ \"Chỉ ORE\" sử dụng.", 28)
-
-section(pOre, "LIST ORE  (bấm tên = TP)")
-Fx.renderOre = addNameList(pOre, "Thêm tên ore...", oreList,
-	function(name) tpToOre(name) end,
-	{{text = "TP", fn = function(n) tpToOre(n) end}})
-
 end
 
 -- ---------- LOOT ----------
@@ -2298,14 +1840,240 @@ addToggle(pLoot, "autoLoot", "Auto Loot", {key = "F4", fn = function(v)
 	if v then
 		Loot.resolve()
 		if not Loot.remote then toast("Chưa tìm thấy remote ToolService, sẽ thử lại khi chạy") end
+		if S.lootMode == 2 and #lootList == 0 then toast("Chế độ \"Chỉ item trong list\" nhưng list đang trống") end
 		startLoop("loot", Loot.tick, function() return S.lootDelay end)
 	else
 		stopLoop("loot")
 	end
 end})
+addCycle(pLoot, "lootMode", "Nhặt", {"Tất cả item", "Chỉ item trong list"})
 addSlider(pLoot, "lootRadius", "Bán kính nhặt (studs)", 5, 10000, 1, 0)
 addSlider(pLoot, "lootDelay", "Tốc độ quét (giây)", 0.05, 2, 0.05, 2)
-note(pLoot, "Gửi lệnh Pickup tới server cho mọi item trong workspace.Items nằm trong bán kính. Bán kính quá lớn có thể gây lag.", 40)
+note(pLoot, "Gửi lệnh Pickup tới server cho item trong workspace.Items nằm trong bán kính. Bán kính quá lớn có thể gây lag.", 40)
+
+section(pLoot, "CHỌN ITEM CẦN NHẶT")
+note(pLoot, "Chọn \"Chỉ item trong list\" ở trên rồi thêm tên item vào list. Tên khớp đúng hoặc chứa trong tên item đều được nhặt.", 40)
+addAction(pLoot, "pickLoot", "Thêm vật dưới con trỏ vào list LOOT", nil, function() Fx.pickUnderMouse(lootList, Fx.renderLoot) end)
+Fx.renderLoot = addNameList(pLoot, "Thêm tên item cần nhặt...", lootList, function(name) toast("Item: " .. name) end, {})
+
+section(pLoot, "DÒ ITEM ĐANG CÓ TRONG workspace.Items")
+local ScanList
+local function scanItems()
+	clearList(ScanList)
+	local folder = workspace:FindFirstChild("Items")
+	if not folder then emptyLabel(ScanList, "Không thấy workspace.Items") return {} end
+	local counts, names = {}, {}
+	for _, it in ipairs(folder:GetChildren()) do
+		local n = it.Name
+		if not counts[n] then counts[n] = 0 names[#names + 1] = n end
+		counts[n] = counts[n] + 1
+	end
+	table.sort(names, function(a, b) return a:lower() < b:lower() end)
+	if #names == 0 then emptyLabel(ScanList, "workspace.Items đang trống") return names end
+	for i, n in ipairs(names) do
+		local inL = false
+		for _, s in ipairs(lootList) do if s:lower() == n:lower() then inL = true break end end
+		addListRow(ScanList, i, n .. "  ×" .. counts[n] .. (inL and "  ✓" or ""),
+			function() toast(addUnique(lootList, n) and ("Đã thêm: " .. n) or ("Đã có trong list: " .. n)) Fx.renderLoot() scanItems() end,
+			{{text = inL and "ĐÃ CÓ" or "ADD", fn = function()
+				toast(addUnique(lootList, n) and ("Đã thêm: " .. n) or ("Đã có trong list: " .. n))
+				Fx.renderLoot()
+				scanItems()
+			end}}, nil)
+	end
+	return names
+end
+addAction(pLoot, "scanLoot", "Quét item hiện có (bấm tên / ADD để thêm)", nil, function() scanItems() end)
+addAction(pLoot, "addAllLoot", "Thêm TẤT CẢ tên đang có vào list", nil, function()
+	local names = scanItems()
+	local added = 0
+	for _, n in ipairs(names) do if addUnique(lootList, n) then added = added + 1 end end
+	Fx.renderLoot()
+	scanItems()
+	toast("Đã thêm " .. added .. " item")
+end)
+addAction(pLoot, "clearLoot", "Xoá toàn bộ list LOOT", nil, function()
+	for i = #lootList, 1, -1 do table.remove(lootList, i) end
+	saveConfig()
+	Fx.renderLoot()
+	scanItems()
+	toast("Đã xoá list LOOT")
+end)
+ScanList = makeList(pLoot)
+emptyLabel(ScanList, "Bấm \"Quét item hiện có\" để xem danh sách")
+end
+
+-- ---------- BÁN (Auto Sell) ----------
+do
+local pSell = newTab("SELL", "💰", "Bán")
+local Sell = {target = nil, deskCF = nil}
+local SellList
+
+local function promptPos(o)
+	local p = o.Parent
+	if not p then return nil end
+	if p:IsA("BasePart") then return p.Position end
+	if p:IsA("Attachment") then return p.WorldPosition end
+	if p:IsA("Model") then return p:GetPivot().Position end
+	local bp = o:FindFirstAncestorWhichIsA("BasePart")
+	return bp and bp.Position
+end
+local function targetPos(t)
+	if t:IsA("ProximityPrompt") then return promptPos(t) end
+	return t.Parent and t.Parent:IsA("BasePart") and t.Parent.Position or nil
+end
+local function fireTarget(t)
+	if not t or not t.Parent then return false end
+	if t:IsA("ProximityPrompt") then
+		if fireproximityprompt then
+			fireproximityprompt(t)
+		else
+			t:InputHoldBegin()
+			task.wait(math.max(t.HoldDuration, 0) + 0.05)
+			t:InputHoldEnd()
+		end
+		return true
+	elseif t:IsA("ClickDetector") and fireclickdetector then
+		fireclickdetector(t)
+		return true
+	end
+	return false
+end
+
+local function describe(d, dist)
+	local what
+	if d:IsA("ProximityPrompt") then
+		what = "[E] " .. (d.ActionText ~= "" and d.ActionText or "?") .. (d.ObjectText ~= "" and (" / " .. d.ObjectText) or "")
+	else
+		what = "[Click]"
+	end
+	local par = d.Parent and d.Parent.Name or "?"
+	return what .. "  ·  " .. par .. "  ·  " .. math.floor(dist) .. "m" .. (Sell.target == d and "  ✓" or "")
+end
+
+function Sell.scan()
+	if not SellList then return end
+	clearList(SellList)
+	local root = getRoot()
+	if not root then return end
+	local found = {}
+	for i, d in ipairs(workspace:GetDescendants()) do
+		if i % 4000 == 0 then RunService.Heartbeat:Wait() end
+		if d:IsA("ProximityPrompt") or d:IsA("ClickDetector") then
+			local pos = targetPos(d)
+			if pos then
+				local dist = (pos - root.Position).Magnitude
+				if dist <= S.sellRange then found[#found + 1] = {inst = d, dist = dist} end
+			end
+		end
+	end
+	table.sort(found, function(a, b) return a.dist < b.dist end)
+	if #found == 0 then emptyLabel(SellList, "Không thấy nút nào trong bán kính") return end
+	for i = 1, math.min(#found, 25) do
+		local f = found[i]
+		local function choose()
+			Sell.target = f.inst
+			toast("Đã chọn nút tính tiền: " .. (f.inst.Parent and f.inst.Parent.Name or "?"))
+			Sell.scan()
+		end
+		addListRow(SellList, i, describe(f.inst, f.dist), choose, {
+			{text = "FIRE", fn = function()
+				local ok = fireTarget(f.inst)
+				toast(ok and "Đã kích hoạt thử" or "Executor không hỗ trợ fire")
+			end},
+			{text = "CHỌN", fn = choose},
+		}, nil)
+	end
+end
+
+function Sell.pull()
+	local folder = workspace:FindFirstChild("Items")
+	if not folder then return end
+	local base = Sell.deskCF and Sell.deskCF.Position or (Sell.target and targetPos(Sell.target))
+	if not base then return end
+	for _, it in ipairs(folder:GetChildren()) do
+		if Loot.wanted(it.Name) then
+			local off = Vector3.new(math.random(-20, 20) / 10, 2.5, math.random(-20, 20) / 10)
+			if it:IsA("Model") then
+				pcall(function() it:PivotTo(CFrame.new(base + off)) end)
+			elseif it:IsA("BasePart") then
+				pcall(function() it.CFrame = CFrame.new(base + off) end)
+			end
+		end
+	end
+end
+
+function Sell.tick()
+	local t = Sell.target
+	if not t or not t.Parent then return end
+	local root = getRoot()
+	if not root then return end
+	if State.sellPull then Sell.pull() end
+	local pos = targetPos(t)
+	if State.sellTP and pos then
+		local reach = math.min(t.MaxActivationDistance, 10)
+		if (root.Position - pos).Magnitude > reach - 1 then
+			teleportToCFrame(CFrame.new(pos + Vector3.new(0, 3, 4)))
+			task.wait(0.15)
+		end
+	end
+	fireTarget(t)
+end
+
+function Sell.remotes()
+	local keys = {"sell", "buy", "cash", "shop", "trade", "coin", "money", "pay", "purchase", "register"}
+	local n, total = 0, 0
+	print("[AlienMango] Remote có tên liên quan tới bán/mua:")
+	for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+		if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+			total = total + 1
+			local l = d.Name:lower()
+			for _, k in ipairs(keys) do
+				if l:find(k, 1, true) then
+					n = n + 1
+					print("   " .. d.ClassName .. "  " .. d:GetFullName())
+					break
+				end
+			end
+		end
+	end
+	toast("Tìm thấy " .. n .. "/" .. total .. " remote liên quan (xem F9)")
+end
+
+section(pSell, "MÁY TÍNH TIỀN")
+note(pSell, "1) Đứng gần máy tính tiền rồi bấm \"Dò nút quanh đây\".\n2) Bấm FIRE thử từng nút; nút nào làm máy tính tiền thì bấm CHỌN.\n3) Bật Auto Bán.", 56)
+addAction(pSell, "sellScan", "Dò nút quanh đây (ProximityPrompt / Click)", nil, function() Sell.scan() end)
+SellList = makeList(pSell)
+emptyLabel(SellList, "Bấm \"Dò nút quanh đây\" để xem danh sách")
+
+section(pSell, "AUTO BÁN")
+addToggle(pSell, "autoSell", "Auto Bán", {key = "F5", fn = function(v)
+	if v then
+		if not Sell.target then
+			toast("Chưa chọn nút tính tiền — hãy dò và CHỌN trước")
+			Toggles.autoSell.set(false)
+			return
+		end
+		startLoop("sell", Sell.tick, function() return S.sellDelay end)
+	else
+		stopLoop("sell")
+	end
+end})
+addToggle(pSell, "sellTP", "Tự TP tới máy khi đứng xa", {noKey = true, persist = true, default = true})
+addToggle(pSell, "sellPull", "Kéo item trong workspace.Items lên bàn (thử nghiệm)", {noKey = true, persist = true, default = false})
+addSlider(pSell, "sellDelay", "Chu kỳ bán (giây)", 0.2, 30, 0.1, 1)
+addSlider(pSell, "sellRange", "Bán kính dò nút (studs)", 10, 200, 5, 0)
+section(pSell, "KHÁC")
+addAction(pSell, "sellOnce", "Bán 1 lần ngay", nil, function()
+	if not Sell.target then toast("Chưa chọn nút tính tiền") return end
+	task.spawn(Sell.tick)
+end)
+addAction(pSell, "setDesk", "Đặt điểm bàn bán tại vị trí này", nil, function()
+	local r = getRoot()
+	if r then Sell.deskCF = r.CFrame toast("Đã đặt điểm bàn bán") end
+end)
+addAction(pSell, "sellRemotes", "Dò Remote liên quan tới bán/mua (xem F9)", nil, Sell.remotes)
+note(pSell, "\"Kéo item lên bàn\" chỉ đổi vị trí vật trên máy bạn, có thể server không nhận. Nếu item của bạn nằm trong túi (Backpack) thì cần biết game đặt item lên bàn bằng cách nào.", 56)
 end
 
 -- ---------- PLAYER ----------
@@ -2356,6 +2124,7 @@ local function tpNear()
 	if best then tpPlayer(best) else toast("Không có ai trong server") end
 end
 
+sideLabel("THÔNG TIN")
 local pPl = newTab("PLAYER", "👥", "Người chơi")
 section(pPl, "TELEPORT TỚI NGƯỜI CHƠI")
 local PlBox, plBtns = addTextRow(pPl, "Tên người chơi (gõ một phần cũng được)...", "", {"TP"})
@@ -2392,12 +2161,12 @@ end
 -- ---------- ESP ----------
 do
 local pEsp = newTab("ESP", "👁", "ESP")
-section(pEsp, "ESP TÊN ITEM / ORE")
+section(pEsp, "ESP TÊN ITEM")
 note(pEsp, "Hiện tên + khoảng cách trên đầu vật để biết tên đúng. Vật cùng tên nằm sát nhau được gộp thành \"Tên ×N\".", 40)
 addToggle(pEsp, "esp", "Bật ESP", {key = "Y", fn = function(v) if v then ESP.start() else ESP.stop() end end})
 
 section(pEsp, "BỘ LỌC")
-addCycle(pEsp, "espMode", "Hiện", {"Tất cả", "Chỉ ORE trong list", "Chỉ ITEM trong list"})
+addCycle(pEsp, "espMode", "Hiện", {"Tất cả", "Chỉ item trong list LOOT"})
 local EspBox = addTextRow(pEsp, "Lọc theo tên (để trống = không lọc)", "", {})
 EspBox.FocusLost:Connect(function() ESP.filter = EspBox.Text end)
 
@@ -2432,6 +2201,7 @@ end
 
 -- ---------- MISC ----------
 do
+sideLabel("HỆ THỐNG")
 local pMisc = newTab("MISC", "✨", "Tiện ích")
 section(pMisc, "HIỂN THỊ")
 addToggle(pMisc, "fullbright", "Fullbright", {key = "B", fn = function(v) if v then startFullbright() else stopFullbright() end end})
@@ -2513,7 +2283,7 @@ function RB.start()
 		local h = (os.clock() * 0.12) % 1
 		Theme.Accent = Color3.fromHSV(h, 0.75, 1)
 		Theme.Accent2 = Color3.fromHSV((h + 0.18) % 1, 0.75, 1)
-		if frame % 300 == 0 then -- dọn object đã bị huỷ
+		if frame % 300 == 0 then
 			local j = 0
 			for i = 1, #accentProps do
 				local e = accentProps[i]
@@ -2534,7 +2304,10 @@ function RB.start()
 		mainGrad.Rotation = (os.clock() * 50) % 360
 		for _, b in pairs(tabBtns) do b.BackgroundColor3 = Theme.Accent end
 		for _, t in pairs(Toggles) do
-			if State[t.id] and t.trk then t.trk.BackgroundColor3 = Theme.Accent end
+			if State[t.id] then
+				if t.trk then t.trk.BackgroundColor3 = Theme.Accent end
+				if t.st then t.st.Color = Theme.Accent end
+			end
 		end
 	end))
 end
@@ -2573,7 +2346,7 @@ end
 section(pSet, "PHÍM TẮT")
 note(pSet, "Bấm vào ô phím bên phải mỗi chức năng, rồi nhấn phím mới.\nEsc = huỷ  •  Backspace / Delete = bỏ phím  •  Trùng phím sẽ tự gỡ phím cũ.", 44)
 
-local unload = function() end -- định nghĩa lại bên dưới
+local unload = function() end
 
 addAction(pSet, "_resetKeys", "Reset tất cả phím về mặc định", nil, function()
 	Config.keys = {}
@@ -2592,7 +2365,6 @@ addAction(pSet, "_unload", "Gỡ script (tắt hết mọi thứ)", nil, functio
 -- INPUT: KEYBINDS + CLICK TP
 -- =========================================================
 track(UIS.InputBegan:Connect(function(input, gp)
-	-- Đang chờ gán phím mới
 	if listening then
 		if input.UserInputType == Enum.UserInputType.Keyboard then
 			local id, kc = listening, input.KeyCode
@@ -2631,7 +2403,6 @@ track(UIS.InputBegan:Connect(function(input, gp)
 	end
 end))
 
--- Respawn: tắt các chức năng gắn với nhân vật cũ
 track(LocalPlayer.CharacterAdded:Connect(function()
 	if State.fly then Toggles.fly.set(false) end
 	if State.ragdoll then Toggles.ragdoll.set(false) end
@@ -2671,13 +2442,36 @@ do
 	end))
 end
 
+-- Nút nổi (kéo được, bấm = ẩn/hiện GUI)
 local Fab = new("TextButton", {
 	Size = UDim2.new(0, 38, 0, 38), Position = UDim2.new(0, 8, 0.5, 0), BackgroundColor3 = Theme.Header,
 	Text = "🥭", TextSize = 18, Font = Enum.Font.GothamBold, AutoButtonColor = false, ZIndex = 100,
 }, ScreenGui)
 corner(Fab, 19)
 bindAccent(stroke(Fab, Theme.Accent, 1.5, 0.3), "Color")
-Fab.MouseButton1Click:Connect(toggleUI)
+do
+	local down, moved, startIn, startPos = false, false, nil, nil
+	Fab.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			down, moved, startIn, startPos = true, false, i.Position, Fab.Position
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if down and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - startIn
+			if d.Magnitude > 5 then moved = true end
+			if moved then
+				Fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if down and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
+			down = false
+			if not moved then toggleUI() end
+		end
+	end))
+end
 
 local minimized = false
 MinBtn.MouseButton1Click:Connect(function()
@@ -2715,5 +2509,5 @@ CloseBtn.MouseButton1Click:Connect(function() unload() end)
 for _, fn in ipairs(pendingInit) do pcall(fn) end
 switchTab("MOVE")
 tween(Main, {Size = UDim2.new(0, W, 0, H)}, 0.3)
-task.delay(0.4, function() toast("Alien Mango V4.1 • RightShift = ẩn/hiện GUI") end)
+task.delay(0.4, function() toast("Alien Mango V5 • RightShift = ẩn/hiện GUI") end)
 end
