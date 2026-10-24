@@ -5,6 +5,7 @@
     hàng bật có viền sáng, nút nổi kéo được
   - AUTO LOOT: chọn item cần nhặt (list riêng, thêm bằng tên / con trỏ / quét Items)
   - XE BAY: tách ra tab riêng
+  - FREECAM: bay camera tự do (phím G)
   Tab: MOVE • XE BAY • FARM • LOOT • BÁN • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
 =====================================================================
 ]]
@@ -22,6 +23,7 @@ local Lighting          = svc("Lighting")
 local CoreGui           = svc("CoreGui")
 local HttpService       = svc("HttpService")
 local VirtualUser       = svc("VirtualUser")
+local ContextActionService = svc("ContextActionService")
 
 -- Gỡ bản cũ nếu chạy lại script (tránh GUI / phím bị nhân đôi)
 local genv = (getgenv and getgenv()) or _G
@@ -98,6 +100,7 @@ local D = {
 	lagLevel = 2, vflySpeed = 80,
 	lootRadius = 15, lootDelay = 0.2, lootMode = 1,
 	sellDelay = 3, sellRange = 60,
+	freecamSpeed = 50,
 }
 local S = {}
 for k, v in pairs(D) do
@@ -810,6 +813,99 @@ local function startNoclip()
 			end
 		end
 	end)
+end
+
+-- ---------- FREECAM ----------
+local Free = {conn = nil, yaw = 0, pitch = 0, pos = Vector3.zero, saved = nil, anchored = false,
+	touchConn = nil, touchDelta = Vector2.zero}
+do
+	function Free.stop()
+		if Free.conn then Free.conn:Disconnect() Free.conn = nil end
+		if Free.touchConn then Free.touchConn:Disconnect() Free.touchConn = nil end
+		pcall(function() ContextActionService:UnbindAction("AM_FreecamSink") end)
+		UIS.MouseBehavior = Enum.MouseBehavior.Default
+
+		local r = getRoot()
+		if r and Free.anchored then r.Anchored = false end
+		Free.anchored = false
+		if State.freecamTP and r and Free.saved then
+			teleportToCFrame(CFrame.new(Free.pos + Vector3.new(0, 3, 0)))
+		end
+
+		local cam = workspace.CurrentCamera
+		if cam and Free.saved then
+			cam.CameraType = Free.saved.type
+			cam.FieldOfView = Free.saved.fov
+			local h = getHum()
+			cam.CameraSubject = h or Free.saved.subject
+		end
+		Free.saved = nil
+	end
+
+	function Free.start()
+		local cam = workspace.CurrentCamera
+		if not cam then Toggles.freecam.set(false) return end
+		Free.stop()
+		Free.saved = {type = cam.CameraType, subject = cam.CameraSubject, fov = cam.FieldOfView}
+		local look = cam.CFrame.LookVector
+		Free.yaw = math.atan2(-look.X, -look.Z)
+		Free.pitch = math.asin(math.clamp(look.Y, -1, 1))
+		Free.pos = cam.CFrame.Position
+		cam.CameraType = Enum.CameraType.Scriptable
+
+		local r = getRoot()
+		if r and State.freecamFreeze then r.Anchored = true Free.anchored = true end
+
+		-- chặn WASD/Space/Shift làm nhân vật chạy
+		ContextActionService:BindActionAtPriority("AM_FreecamSink", function()
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.ContextActionPriority.High.Value,
+			Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+			Enum.KeyCode.Space, Enum.KeyCode.LeftShift)
+
+		-- kéo màn hình (mobile) để xoay
+		Free.touchDelta = Vector2.zero
+		Free.touchConn = UIS.TouchMoved:Connect(function(input, gp)
+			if not gp then Free.touchDelta += Vector2.new(input.Delta.X, input.Delta.Y) end
+		end)
+
+		Free.conn = RunService.RenderStepped:Connect(function(dt)
+			local c = workspace.CurrentCamera
+			if not c then return end
+			if c.CameraType ~= Enum.CameraType.Scriptable then c.CameraType = Enum.CameraType.Scriptable end
+
+			-- xoay: giữ chuột phải
+			local rmb = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+			UIS.MouseBehavior = rmb and Enum.MouseBehavior.LockCurrentPosition or Enum.MouseBehavior.Default
+			local dl = Free.touchDelta
+			Free.touchDelta = Vector2.zero
+			if rmb then
+				local md = UIS:GetMouseDelta()
+				dl = dl + Vector2.new(md.X, md.Y)
+			end
+			Free.yaw = Free.yaw - dl.X * 0.0035
+			Free.pitch = math.clamp(Free.pitch - dl.Y * 0.0035, -1.5, 1.5)
+
+			local rot = CFrame.Angles(0, Free.yaw, 0) * CFrame.Angles(Free.pitch, 0, 0)
+			local d = Vector3.zero
+			if not UIS:GetFocusedTextBox() then
+				if UIS:IsKeyDown(Enum.KeyCode.W) then d += rot.LookVector end
+				if UIS:IsKeyDown(Enum.KeyCode.S) then d -= rot.LookVector end
+				if UIS:IsKeyDown(Enum.KeyCode.A) then d -= rot.RightVector end
+				if UIS:IsKeyDown(Enum.KeyCode.D) then d += rot.RightVector end
+				if UIS:IsKeyDown(Enum.KeyCode.Space) then d += Vector3.yAxis end
+				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
+			end
+			if d.Magnitude == 0 then
+				local h = getHum()
+				if h and h.MoveDirection.Magnitude > 0 then d = h.MoveDirection end -- mobile
+			end
+			if d.Magnitude > 0 then d = d.Unit end
+			local boost = UIS:IsKeyDown(Enum.KeyCode.LeftControl) and 3 or 1
+			Free.pos = Free.pos + d * S.freecamSpeed * boost * dt
+			c.CFrame = CFrame.new(Free.pos) * rot
+		end)
+	end
 end
 
 -- ---------- Inf jump ----------
@@ -1802,6 +1898,12 @@ addToggle(pMove, "ragdoll", "Ragdoll",    {key = "R", fn = function(v) if v then
 section(pMove, "TỐC ĐỘ")
 addSlider(pMove, "flySpeed", "Fly speed", 1, 500, 1, 0)
 addSlider(pMove, "runSpeed", "Run speed", 1, 500, 1, 0)
+section(pMove, "FREECAM")
+addToggle(pMove, "freecam", "Freecam (giữ chuột phải để xoay)", {key = "G", fn = function(v) if v then Free.start() else Free.stop() end end})
+addToggle(pMove, "freecamFreeze", "Freecam: nhân vật đứng yên", {noKey = true, persist = true, default = true})
+addToggle(pMove, "freecamTP", "Tắt freecam → TP nhân vật tới camera", {noKey = true, persist = true, default = false})
+addSlider(pMove, "freecamSpeed", "Freecam speed", 1, 1000, 1, 0)
+note(pMove, "WASD đi • Space lên • Shift xuống • giữ Ctrl = nhanh x3 • giữ chuột phải + rê để xoay (mobile: kéo ngón tay).", 40)
 section(pMove, "TELEPORT")
 addToggle(pMove, "clickTP", "Click TP (bấm là dịch chuyển)", {key = "T", fn = function() end})
 addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = true, default = true})
@@ -2406,6 +2508,7 @@ end))
 track(LocalPlayer.CharacterAdded:Connect(function()
 	if State.fly then Toggles.fly.set(false) end
 	if State.ragdoll then Toggles.ragdoll.set(false) end
+	if State.freecam then Toggles.freecam.set(false) end
 end))
 
 -- =========================================================
@@ -2486,6 +2589,7 @@ unload = function()
 	for _, t in pairs(Toggles) do
 		if not t.persist and State[t.id] then pcall(t.set, false) end
 	end
+	pcall(Free.stop)
 	if afkConn then afkConn:Disconnect() afkConn = nil end
 	pcall(Lag.restore)
 	pcall(VF.stop)
