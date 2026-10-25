@@ -5,7 +5,6 @@
     hàng bật có viền sáng, nút nổi kéo được
   - AUTO LOOT: chọn item cần nhặt (list riêng, thêm bằng tên / con trỏ / quét Items)
   - XE BAY: tách ra tab riêng
-  - FREECAM: bay camera tự do (phím G)
   Tab: MOVE • XE BAY • FARM • LOOT • BÁN • PLAYER • ESP • POINTS • MISC • CHAT • SETTINGS
 =====================================================================
 ]]
@@ -23,7 +22,6 @@ local Lighting          = svc("Lighting")
 local CoreGui           = svc("CoreGui")
 local HttpService       = svc("HttpService")
 local VirtualUser       = svc("VirtualUser")
-local ContextActionService = svc("ContextActionService")
 
 -- Gỡ bản cũ nếu chạy lại script (tránh GUI / phím bị nhân đôi)
 local genv = (getgenv and getgenv()) or _G
@@ -74,6 +72,9 @@ if type(Config.lists) ~= "table" then Config.lists = {} end
 if type(Config.lists.bring) ~= "table" then Config.lists.bring = {"Common Scrap"} end
 if type(Config.lists.loot) ~= "table" then Config.lists.loot = {} end
 if type(Config.points[PLACE]) ~= "table" then Config.points[PLACE] = {} end
+if type(Config.epoints) ~= "table" then Config.epoints = {} end
+if type(Config.epoints[PLACE]) ~= "table" then Config.epoints[PLACE] = {} end
+if type(Config.collapsed) ~= "table" then Config.collapsed = {} end
 if type(Config.bringName) ~= "string" then Config.bringName = "Common Scrap" end
 
 local function flushConfig()
@@ -90,17 +91,21 @@ local function saveConfig()
 end
 
 local lootList, points = Config.lists.loot, Config.points[PLACE]
+local epoints = Config.epoints[PLACE] -- điểm nút E đã lưu (chỉ chứa số/chữ, không chứa Instance)
 
 -- Giá trị số (slider)
 local D = {
 	flySpeed = 50, runSpeed = 40,
 	aimRange = 200, aimSmooth = 1, aimFov = 600, aimPartIdx = 1,
-	espRange = 150, espMax = 60, espMode = 1, espSize = 13,
+	espRange = 150, espMax = 40, espMode = 1, espSize = 13,
 	escapeHp = 40, uiScale = 1,
 	lagLevel = 2, vflySpeed = 80,
 	lootRadius = 15, lootDelay = 0.2, lootMode = 1,
-	sellDelay = 3, sellRange = 60,
-	freecamSpeed = 50,
+	lootMax = 25, lootTPRange = 300, jumpPower = 100, gravity = 60, pespRange = 1000,
+	aaDelay = 0.3, clickCps = 10, ppRange = 15, fov = 90, zoomMax = 1000, clock = 14,
+	tpSpeed = 120, afRange = 150, afDist = 5, afHeight = 3, healHp = 40, healCd = 3,
+	patrolWait = 5, patrolMode = 1, fpsCap = 144, espSrc = 1, ppManual = 20, ppSpamDelay = 0.2,
+	epMode = 1, epTarget = 1, epWait = 0.3, epDelay = 0.5,
 }
 local S = {}
 for k, v in pairs(D) do
@@ -109,6 +114,8 @@ for k, v in pairs(D) do
 end
 if S.espMode > 2 then S.espMode = 1 end
 if S.lootMode > 2 then S.lootMode = 1 end
+if S.epMode > 2 then S.epMode = 1 end
+if S.epTarget > 2 then S.epTarget = 1 end
 
 -- ================= THEME =================
 local Accents = {
@@ -184,9 +191,11 @@ local function card(parent, h, order)
 end
 
 local Fx = {}
+local UX
 
 -- ================= WINDOW =================
-local W, H = 700, 460
+local W = math.clamp(tonumber(Config.winW) or 700, 520, 1100)
+local H = math.clamp(tonumber(Config.winH) or 460, 340, 760)
 local HEAD, FOOT = 46, 30
 local SIDE_W = 150
 
@@ -307,6 +316,7 @@ end
 
 -- ================= TABS =================
 local pages, tabBtns, tabInd, tabNames, tabOrder, activeTab = {}, {}, {}, {}, 0, nil
+UX = {reg = {}, tabLabel = {}, dots = {}, search = ""}
 
 local function refreshTabs()
 	for n, btn in pairs(tabBtns) do
@@ -322,6 +332,16 @@ accentHooks[#accentHooks + 1] = refreshTabs
 local function switchTab(name)
 	local prev = activeTab
 	activeTab = name
+	if name ~= "SEARCH" then
+		Config.tab = name
+		saveConfig()
+		if UX.box and UX.box.Text ~= "" then
+			UX.jumping = true
+			UX.box.Text = ""
+			UX.jumping = false
+		end
+	end
+	if name == "HOME" and UX.homeRefresh then UX.homeRefresh() end
 	for n, p in pairs(pages) do p.Visible = (n == name) end
 	PageTitle.Text = tabNames[name] or name
 	if prev ~= name and pages[name] then
@@ -351,6 +371,12 @@ local function newTab(name, icon, label)
 		BorderSizePixel = 0, BackgroundTransparency = 1}, btn)
 	corner(ind, 2)
 	bindAccent(ind, "BackgroundColor3")
+	local dot = new("Frame", {Size = UDim2.new(0, 7, 0, 7), Position = UDim2.new(1, -14, 0.5, -3), BorderSizePixel = 0,
+		BackgroundTransparency = 1}, btn)
+	corner(dot, 4)
+	bindAccent(dot, "BackgroundColor3")
+	UX.dots[name] = dot
+	UX.tabLabel[name] = icon .. " " .. label
 	btn.MouseEnter:Connect(function() if activeTab ~= name then tween(btn, {BackgroundTransparency = 0.9}, 0.12) end end)
 	btn.MouseLeave:Connect(function() if activeTab ~= name then tween(btn, {BackgroundTransparency = 1}, 0.12) end end)
 	btn.MouseButton1Click:Connect(function() switchTab(name) end)
@@ -426,6 +452,7 @@ local State, Toggles, pendingInit = {}, {}, {}
 
 local function section(page, text)
 	local f = new("Frame", {Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = ord(page)}, page)
+	f:SetAttribute("sec", text)
 	local bar = new("Frame", {Size = UDim2.new(0, 3, 0, 12), Position = UDim2.new(0, 2, 0.5, -6), BorderSizePixel = 0}, f)
 	corner(bar, 2)
 	bindAccent(bar, "BackgroundColor3")
@@ -453,7 +480,9 @@ end
 
 local function addToggle(page, id, label, cfg)
 	cfg = cfg or {}
-	local t = {id = id, persist = cfg.persist, opt = cfg.noKey}
+	local ent = {kind = "toggle", id = id, label = label, page = page}
+	UX.reg[#UX.reg + 1] = ent
+	local t = {id = id, persist = cfg.persist, opt = cfg.noKey, page = page, label = label}
 	Toggles[id] = t
 	State[id] = false
 	if cfg.persist then
@@ -463,6 +492,7 @@ local function addToggle(page, id, label, cfg)
 	end
 
 	local row, rowSt = card(page, 38, ord(page))
+	ent.row = row
 	t.st = rowSt
 	local trk = new("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(0, 10, 0.5, -10),
 		BackgroundColor3 = Theme.Off, BorderSizePixel = 0}, row)
@@ -512,7 +542,10 @@ local function addToggle(page, id, label, cfg)
 end
 
 local function addAction(page, id, label, defaultKey, fn)
+	local ent = {kind = "action", id = id, label = label, page = page, fn = fn}
+	UX.reg[#UX.reg + 1] = ent
 	local row = card(page, 38, ord(page))
+	ent.row = row
 	local hit = new("TextButton", {
 		Size = UDim2.new(1, -74, 1, 0), BackgroundTransparency = 1, Text = "▶  " .. label, TextColor3 = Theme.Text,
 		Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
@@ -528,7 +561,10 @@ end
 
 local function addSlider(page, key, label, min, max, step, dec, onChange)
 	dec = dec or 0
+	local ent = {kind = "slider", id = key, label = label, page = page}
+	UX.reg[#UX.reg + 1] = ent
 	local row = card(page, 48, ord(page))
+	ent.row = row
 	new("TextLabel", {Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 12, 0, 5), BackgroundTransparency = 1,
 		Text = label, TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium, TextSize = 12,
 		TextXAlignment = Enum.TextXAlignment.Left}, row)
@@ -742,10 +778,29 @@ local function stopLoop(id) Loops[id] = nil end
 
 -- ---------- Teleport helpers ----------
 local prevCF
-local function teleportToCFrame(cf)
+local tpTok = 0
+-- instant = true: luôn dịch chuyển tức thì (dùng cho thoát hiểm), bỏ qua chế độ TP mượt
+local function teleportToCFrame(cf, instant)
 	local root = getRoot()
-	if root then
-		prevCF = root.CFrame
+	if not root then return end
+	prevCF = root.CFrame
+	tpTok = tpTok + 1
+	if State.smoothTP and not instant then
+		local tok = tpTok
+		local start = root.CFrame
+		local dist = (cf.Position - start.Position).Magnitude
+		local dur = math.max(dist / math.max(S.tpSpeed, 1), 0.05)
+		task.spawn(function()
+			local t0 = os.clock()
+			while tpTok == tok and root.Parent do
+				local a = math.min((os.clock() - t0) / dur, 1)
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.CFrame = start:Lerp(cf, a)
+				if a >= 1 then break end
+				RunService.Heartbeat:Wait()
+			end
+		end)
+	else
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.CFrame = cf
 	end
@@ -813,99 +868,6 @@ local function startNoclip()
 			end
 		end
 	end)
-end
-
--- ---------- FREECAM ----------
-local Free = {conn = nil, yaw = 0, pitch = 0, pos = Vector3.zero, saved = nil, anchored = false,
-	touchConn = nil, touchDelta = Vector2.zero}
-do
-	function Free.stop()
-		if Free.conn then Free.conn:Disconnect() Free.conn = nil end
-		if Free.touchConn then Free.touchConn:Disconnect() Free.touchConn = nil end
-		pcall(function() ContextActionService:UnbindAction("AM_FreecamSink") end)
-		UIS.MouseBehavior = Enum.MouseBehavior.Default
-
-		local r = getRoot()
-		if r and Free.anchored then r.Anchored = false end
-		Free.anchored = false
-		if State.freecamTP and r and Free.saved then
-			teleportToCFrame(CFrame.new(Free.pos + Vector3.new(0, 3, 0)))
-		end
-
-		local cam = workspace.CurrentCamera
-		if cam and Free.saved then
-			cam.CameraType = Free.saved.type
-			cam.FieldOfView = Free.saved.fov
-			local h = getHum()
-			cam.CameraSubject = h or Free.saved.subject
-		end
-		Free.saved = nil
-	end
-
-	function Free.start()
-		local cam = workspace.CurrentCamera
-		if not cam then Toggles.freecam.set(false) return end
-		Free.stop()
-		Free.saved = {type = cam.CameraType, subject = cam.CameraSubject, fov = cam.FieldOfView}
-		local look = cam.CFrame.LookVector
-		Free.yaw = math.atan2(-look.X, -look.Z)
-		Free.pitch = math.asin(math.clamp(look.Y, -1, 1))
-		Free.pos = cam.CFrame.Position
-		cam.CameraType = Enum.CameraType.Scriptable
-
-		local r = getRoot()
-		if r and State.freecamFreeze then r.Anchored = true Free.anchored = true end
-
-		-- chặn WASD/Space/Shift làm nhân vật chạy
-		ContextActionService:BindActionAtPriority("AM_FreecamSink", function()
-			return Enum.ContextActionResult.Sink
-		end, false, Enum.ContextActionPriority.High.Value,
-			Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
-			Enum.KeyCode.Space, Enum.KeyCode.LeftShift)
-
-		-- kéo màn hình (mobile) để xoay
-		Free.touchDelta = Vector2.zero
-		Free.touchConn = UIS.TouchMoved:Connect(function(input, gp)
-			if not gp then Free.touchDelta += Vector2.new(input.Delta.X, input.Delta.Y) end
-		end)
-
-		Free.conn = RunService.RenderStepped:Connect(function(dt)
-			local c = workspace.CurrentCamera
-			if not c then return end
-			if c.CameraType ~= Enum.CameraType.Scriptable then c.CameraType = Enum.CameraType.Scriptable end
-
-			-- xoay: giữ chuột phải
-			local rmb = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-			UIS.MouseBehavior = rmb and Enum.MouseBehavior.LockCurrentPosition or Enum.MouseBehavior.Default
-			local dl = Free.touchDelta
-			Free.touchDelta = Vector2.zero
-			if rmb then
-				local md = UIS:GetMouseDelta()
-				dl = dl + Vector2.new(md.X, md.Y)
-			end
-			Free.yaw = Free.yaw - dl.X * 0.0035
-			Free.pitch = math.clamp(Free.pitch - dl.Y * 0.0035, -1.5, 1.5)
-
-			local rot = CFrame.Angles(0, Free.yaw, 0) * CFrame.Angles(Free.pitch, 0, 0)
-			local d = Vector3.zero
-			if not UIS:GetFocusedTextBox() then
-				if UIS:IsKeyDown(Enum.KeyCode.W) then d += rot.LookVector end
-				if UIS:IsKeyDown(Enum.KeyCode.S) then d -= rot.LookVector end
-				if UIS:IsKeyDown(Enum.KeyCode.A) then d -= rot.RightVector end
-				if UIS:IsKeyDown(Enum.KeyCode.D) then d += rot.RightVector end
-				if UIS:IsKeyDown(Enum.KeyCode.Space) then d += Vector3.yAxis end
-				if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then d -= Vector3.yAxis end
-			end
-			if d.Magnitude == 0 then
-				local h = getHum()
-				if h and h.MoveDirection.Magnitude > 0 then d = h.MoveDirection end -- mobile
-			end
-			if d.Magnitude > 0 then d = d.Unit end
-			local boost = UIS:IsKeyDown(Enum.KeyCode.LeftControl) and 3 or 1
-			Free.pos = Free.pos + d * S.freecamSpeed * boost * dt
-			c.CFrame = CFrame.new(Free.pos) * rot
-		end)
-	end
 end
 
 -- ---------- Inf jump ----------
@@ -1103,9 +1065,12 @@ function Fx.pickUnderMouse(store, render)
 end
 
 -- ---------- ESP tên item (nhãn gọn, không chồng nhau, có số mét) ----------
-local ESP = {gui = nil, map = {}, items = {}, rconn = nil, on = false, filter = ""}
+-- Tối ưu chống lag: mặc định chỉ đọc workspace.Items (rất nhẹ). Chế độ toàn map dùng cache + quét chia nhỏ từng khung hình.
+local ESP = {gui = nil, map = {}, items = {}, rconn = nil, on = false, filter = "",
+	cache = {}, adn = setmetatable({}, {__mode = "k"}), queue = {}, qi = 1, conns = {}, lastTxt = 0}
 do
 	local SkipESP = {Terrain = true, Baseplate = true, SpawnLocation = true, Camera = true}
+	local modelOk = setmetatable({}, {__mode = "k"})
 
 	local function inPlayer(inst)
 		for _, p in ipairs(Players:GetPlayers()) do
@@ -1128,13 +1093,28 @@ do
 		local tool = d:FindFirstAncestorOfClass("Tool")
 		if tool then return tool end
 		local m = d:FindFirstAncestorOfClass("Model")
-		if m and #m:GetDescendants() <= 300 then return m end
+		if m then
+			local ok = modelOk[m]
+			if ok == nil then
+				ok = #m:GetDescendants() <= 300
+				modelOk[m] = ok
+			end
+			if ok then return m end
+		end
 		return d
 	end
 	local function adornee(inst)
 		if inst:IsA("Model") then return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true) end
 		if inst:IsA("Tool") then return inst:FindFirstChild("Handle") or inst:FindFirstChildWhichIsA("BasePart", true) end
 		return inst
+	end
+	local function adn(c)
+		local a = ESP.adn[c]
+		if not a or not a.Parent then
+			a = adornee(c)
+			ESP.adn[c] = a
+		end
+		return a
 	end
 	local function esc(t) return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 
@@ -1182,6 +1162,43 @@ do
 		return '<font color="#FFE27A"><b>' .. nm .. '</b></font>\n<font color="' .. col .. '" size="' .. math.max(S.espSize - 1, 8) .. '"><b>' .. sub .. '</b></font>'
 	end
 
+	-- chế độ toàn map: xử lý hàng đợi theo lát 3ms/khung hình, không bao giờ làm đơ game
+	local function pump()
+		local q, i = ESP.queue, ESP.qi
+		local n = #q
+		if i > n then
+			if n > 0 then ESP.queue, ESP.qi = {}, 1 end
+			return
+		end
+		local t0, cnt = os.clock(), 0
+		while i <= n do
+			local d = q[i]
+			q[i] = false
+			i = i + 1
+			if d and d.Parent and (d:IsA("BasePart") or d:IsA("Tool")) and not d:IsA("Terrain") then
+				local c = cand(d)
+				if c and not ESP.cache[c] and not inPlayer(c) then ESP.cache[c] = true end
+			end
+			cnt = cnt + 1
+			if cnt % 40 == 0 and os.clock() - t0 > 0.003 then break end
+		end
+		ESP.qi = i
+	end
+	function ESP.watchStart()
+		if ESP.conns.add then return end
+		ESP.queue, ESP.qi, ESP.cache = workspace:GetDescendants(), 1, {}
+		ESP.conns.add = track(workspace.DescendantAdded:Connect(function(d) ESP.queue[#ESP.queue + 1] = d end))
+		ESP.conns.rem = track(workspace.DescendantRemoving:Connect(function(d) ESP.cache[d] = nil end))
+		ESP.conns.pump = track(RunService.Heartbeat:Connect(pump))
+	end
+	function ESP.watchStop()
+		for k, c in pairs(ESP.conns) do
+			c:Disconnect()
+			ESP.conns[k] = nil
+		end
+		ESP.cache, ESP.queue, ESP.qi = {}, {}, 1
+	end
+
 	function ESP.clear()
 		if ESP.rconn then ESP.rconn:Disconnect() ESP.rconn = nil end
 		if ESP.gui then pcall(function() ESP.gui:Destroy() end) end
@@ -1193,44 +1210,65 @@ do
 		if not root or not ESP.on then return end
 		local filter = trim(ESP.filter):lower()
 		local mode = S.espMode
-		local seen, list = {}, {}
-		for i, d in ipairs(workspace:GetDescendants()) do
-			if i % 3000 == 0 then
-				RunService.Heartbeat:Wait()
-				if not ESP.on then return end
+		local rp, range = root.Position, S.espRange
+		local r2 = range * range
+		local folder = (S.espSrc ~= 2) and workspace:FindFirstChild("Items") or nil
+		if folder then
+			if next(ESP.conns) then ESP.watchStop() end
+		else
+			ESP.watchStart()
+		end
+
+		local list, n = {}, 0
+		local function consider(c)
+			local name = c.Name
+			if SkipESP[name] then return end
+			if filter ~= "" and not name:lower():find(filter, 1, true) then return end
+			if mode == 2 and not inList(lootList, name) then return end
+			local a = adn(c)
+			if not a then return end
+			local p = a.Position
+			local dx, dy, dz = p.X - rp.X, p.Y - rp.Y, p.Z - rp.Z
+			local d2 = dx * dx + dy * dy + dz * dz
+			if d2 <= r2 then
+				n = n + 1
+				list[n] = {inst = c, ad = a, pos = p, d2 = d2, name = name}
 			end
-			if d:IsA("BasePart") or d:IsA("Tool") then
-				local c = cand(d)
-				if c and not seen[c] then
-					seen[c] = true
-					local n = c.Name
-					local pass = not SkipESP[n] and (filter == "" or n:lower():find(filter, 1, true))
-					if pass and mode == 2 then pass = inList(lootList, n) end
-					if pass and not inPlayer(c) then
-						local okp, pos = pcall(getPos, c)
-						if okp and pos then
-							local dist = (pos - root.Position).Magnitude
-							if dist <= S.espRange then list[#list + 1] = {inst = c, pos = pos, dist = dist} end
-						end
-					end
-				end
+		end
+		if folder then
+			for _, c in ipairs(folder:GetChildren()) do
+				if c:IsA("Model") or c:IsA("BasePart") or c:IsA("Tool") then consider(c) end
+			end
+		else
+			for c in pairs(ESP.cache) do
+				if c.Parent then consider(c) else ESP.cache[c] = nil end
 			end
 		end
 		if not ESP.on then return end
-		table.sort(list, function(a, b) return a.dist < b.dist end)
+		table.sort(list, function(a, b) return a.d2 < b.d2 end)
 
-		local clusters = {}
+		-- gộp vật cùng tên nằm trong 6 studs → "Tên ×N" (chỉ so với cụm cùng tên nên rất nhẹ)
+		local clusters, byName, nc, maxN = {}, {}, 0, S.espMax
 		for _, e in ipairs(list) do
-			local n, merged = e.inst.Name, false
-			for _, c in ipairs(clusters) do
-				if c.name == n and (c.pos - e.pos).Magnitude <= 6 then
-					c.count = c.count + 1
-					merged = true
-					break
+			local p, name = e.pos, e.name
+			local same = byName[name]
+			local merged = false
+			if same then
+				for _, c in ipairs(same) do
+					local dx, dy, dz = p.X - c.px, p.Y - c.py, p.Z - c.pz
+					if dx * dx + dy * dy + dz * dz <= 36 then
+						c.count = c.count + 1
+						merged = true
+						break
+					end
 				end
 			end
-			if not merged and #clusters < S.espMax then
-				clusters[#clusters + 1] = {inst = e.inst, name = n, pos = e.pos, count = 1}
+			if not merged and nc < maxN then
+				nc = nc + 1
+				local c = {inst = e.inst, ad = e.ad, name = name, count = 1, px = p.X, py = p.Y, pz = p.Z}
+				clusters[nc] = c
+				if not same then same = {} byName[name] = same end
+				same[#same + 1] = c
 			end
 		end
 
@@ -1242,20 +1280,19 @@ do
 		end
 		local keep, items = {}, {}
 		for _, c in ipairs(clusters) do
-			local ad = adornee(c.inst)
-			if ad then
-				local it = ESP.map[c.inst]
-				if not it then
-					it = {inst = c.inst, label = makeLabel()}
-					ESP.map[c.inst] = it
-				end
-				it.ad, it.name, it.count, it.lastD = ad, c.name, c.count, nil
-				local inst = c.inst
-				it.parent = (not inst:IsA("Model") and not inst:IsA("Tool") and inst.Parent and inst.Parent ~= workspace)
-					and inst.Parent.Name or nil
-				keep[c.inst] = true
-				items[#items + 1] = it
+			local it = ESP.map[c.inst]
+			if not it then
+				it = {inst = c.inst, label = makeLabel()}
+				ESP.map[c.inst] = it
 			end
+			if it.count ~= c.count or it.name ~= c.name then it.lastD = nil end
+			it.ad, it.name, it.count = c.ad, c.name, c.count
+			local inst = c.inst
+			local par = inst.Parent
+			it.parent = (not inst:IsA("Model") and not inst:IsA("Tool") and par and par ~= workspace and par.Name ~= "Items")
+				and par.Name or nil
+			keep[c.inst] = true
+			items[#items + 1] = it
 		end
 		for inst, it in pairs(ESP.map) do
 			if not keep[inst] then
@@ -1267,30 +1304,46 @@ do
 	end
 
 	function ESP.render()
+		local items = ESP.items
+		if #items == 0 then return end
 		local cam, root = workspace.CurrentCamera, getRoot()
 		if not cam or not root then return end
-		local placed = {}
-		for _, it in ipairs(ESP.items) do
+		local rp = root.Position
+		local now = os.clock()
+		local doText = now - ESP.lastTxt > 0.15
+		if doText then ESP.lastTxt = now end
+		local size = S.espSize
+		local up = Vector3.new(0, 2, 0)
+		local placed, np = {}, 0
+		for _, it in ipairs(items) do
 			local ad, lb = it.ad, it.label
 			if not ad or not ad.Parent or not lb.Parent then
 				lb.Visible = false
 			else
-				local v, on = cam:WorldToViewportPoint(ad.Position + Vector3.new(0, 2, 0))
+				local pos = ad.Position
+				local v, on = cam:WorldToViewportPoint(pos + up)
 				if not on or v.Z <= 0 then
 					lb.Visible = false
 				else
-					local d = math.floor((ad.Position - root.Position).Magnitude)
-					if it.lastD ~= d or lb.TextSize ~= S.espSize then
-						it.lastD = d
-						lb.TextSize = S.espSize
+					local d = math.floor((pos - rp).Magnitude)
+					local setNow = false
+					if it.lastD == nil or (doText and it.lastD ~= d) or it.size ~= size then
+						it.lastD, it.size = d, size
+						lb.TextSize = size
 						lb.Text = fmt(it, d)
+						it.needSize, setNow = true, true
 					end
-					local w, h = lb.AbsoluteSize.X, lb.AbsoluteSize.Y
-					if w < 20 then w, h = 100, 34 end
+					if it.needSize and not setNow then
+						local w0, h0 = lb.AbsoluteSize.X, lb.AbsoluteSize.Y
+						if w0 >= 20 then it.w, it.h = w0, h0 end
+						it.needSize = false
+					end
+					local w, h = it.w or 100, it.h or 34
 					local x, y = v.X, v.Y
-					for _ = 1, 12 do
+					for _ = 1, 8 do
 						local hit = false
-						for _, r in ipairs(placed) do
+						for k = 1, np do
+							local r = placed[k]
 							if math.abs(x - r[1]) < (w + r[3]) / 2 + 2 and math.abs(y - r[2]) < (h + r[4]) / 2 + 2 then
 								y = y - (h + 3)
 								hit = true
@@ -1299,7 +1352,8 @@ do
 						end
 						if not hit then break end
 					end
-					placed[#placed + 1] = {x, y - h / 2, w, h}
+					np = np + 1
+					placed[np] = {x, y - h / 2, w, h}
 					lb.Position = UDim2.fromOffset(x, y)
 					lb.Visible = true
 				end
@@ -1311,11 +1365,12 @@ do
 		ESP.on = true
 		if ESP.rconn then ESP.rconn:Disconnect() end
 		ESP.rconn = track(RunService.RenderStepped:Connect(ESP.render))
-		startLoop("esp", ESP.refresh, function() return 1.5 end)
+		startLoop("esp", ESP.refresh, function() return 0.75 end)
 	end
 	function ESP.stop()
 		ESP.on = false
 		stopLoop("esp")
+		ESP.watchStop()
 		ESP.clear()
 	end
 end
@@ -1484,7 +1539,7 @@ do
 		local ratio = Hp.ratio()
 		if ratio and ratio > 0 and ratio <= S.escapeHp / 100 and os.clock() - Safe.last > 1.5 then
 			Safe.last = os.clock()
-			teleportToCFrame(Safe.cf)
+			teleportToCFrame(Safe.cf, true)
 			if State.escapeOnce then
 				toast("Máu thấp → đã về điểm an toàn (1 lần, đã tắt)")
 				if Toggles.autoEscape then Toggles.autoEscape.set(false) end
@@ -1823,7 +1878,7 @@ do
 end
 
 -- ---------- AUTO LOOT (có chọn item) ----------
-local Loot = {remote = nil, picked = 0}
+local Loot = {remote = nil, picked = 0, sent = setmetatable({}, {__mode = "k"}), home = nil, addConn = nil, stat = nil}
 do
 	local function lootPart(o)
 		if o:IsA("BasePart") then return o end
@@ -1869,21 +1924,1015 @@ do
 		if S.lootMode == 2 and #lootList == 0 then return end
 		if not Loot.remote or not Loot.remote.Parent then Loot.resolve() end
 		if not Loot.remote then return end
+		local now = os.clock()
+		local near, far, farD, busy = {}, nil, nil, false
 		for _, item in ipairs(folder:GetChildren()) do
 			if Loot.wanted(item.Name) then
 				local part = lootPart(item)
-				if part and (root.Position - part.Position).Magnitude <= S.lootRadius then
-					pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
-					Loot.picked = Loot.picked + 1
+				if part then
+					local d = (root.Position - part.Position).Magnitude
+					if d <= S.lootRadius then
+						if not Loot.sent[item] or now - Loot.sent[item] > 1 then
+							near[#near + 1] = {item = item, d = d}
+						else
+							busy = true
+						end
+					elseif State.lootTP and d <= S.lootTPRange and (not farD or d < farD) then
+						far, farD = part, d
+					end
 				end
 			end
 		end
+		table.sort(near, function(a, b) return a.d < b.d end)
+		for i = 1, math.min(#near, S.lootMax) do
+			local item = near[i].item
+			Loot.sent[item] = now
+			pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
+			Loot.picked = Loot.picked + 1
+		end
+		if Loot.stat then Loot.stat.Text = "Đã gửi lệnh nhặt: " .. Loot.picked .. " item" end
+		if #near == 0 and not busy then
+			if far then
+				if not Loot.home then Loot.home = root.CFrame end
+				teleportToCFrame(CFrame.new(far.Position + Vector3.new(0, 3, 0)))
+			elseif Loot.home then
+				if State.lootReturn then teleportToCFrame(Loot.home) end
+				Loot.home = nil
+			end
+		end
+	end
+
+	-- nhặt ngay khi item vừa rơi ra (không chờ vòng quét)
+	function Loot.instantOn(v)
+		if Loot.addConn then Loot.addConn:Disconnect() Loot.addConn = nil end
+		if not v then return end
+		local folder = workspace:FindFirstChild("Items")
+		if not folder then toast("Không thấy workspace.Items") return end
+		Loot.addConn = track(folder.ChildAdded:Connect(function(item)
+			task.wait(0.05)
+			local root = getRoot()
+			if not (State.autoLoot and root and item.Parent and Loot.remote and Loot.wanted(item.Name)) then return end
+			local part = lootPart(item)
+			if part and (root.Position - part.Position).Magnitude <= S.lootRadius then
+				Loot.sent[item] = os.clock()
+				Loot.picked = Loot.picked + 1
+				pcall(function() Loot.remote:FireServer({"Pickup", item}) end)
+			end
+		end))
+	end
+end
+
+-- ---------- ESP NGƯỜI CHƠI / NPC (viền Highlight xuyên tường) ----------
+do
+	local P = {objs = {}, npc = {}, npcConn = nil, folder = nil}
+	Fx.PESP = P
+	local function esc(t) return (tostring(t):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+
+	local function hookNpc(h)
+		if h:IsA("Humanoid") then
+			local m = h.Parent
+			if m and m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then P.npc[m] = h end
+		end
+	end
+
+	function P.hooks()
+		if State.pespNPC and not P.npcConn then
+			P.npcConn = track(workspace.DescendantAdded:Connect(hookNpc))
+			for i, d in ipairs(workspace:GetDescendants()) do
+				if i % 3000 == 0 then RunService.Heartbeat:Wait() end
+				hookNpc(d)
+			end
+		elseif not State.pespNPC and P.npcConn then
+			P.npcConn:Disconnect()
+			P.npcConn = nil
+			P.npc = {}
+		end
+	end
+
+	local function make(e)
+		local hl = Instance.new("Highlight")
+		hl.Adornee = e.m
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.FillTransparency = 0.65
+		hl.OutlineTransparency = 0
+		hl.Parent = P.folder
+		local bb = Instance.new("BillboardGui")
+		bb.Adornee = e.r
+		bb.AlwaysOnTop = true
+		bb.Size = UDim2.new(0, 150, 0, 34)
+		bb.StudsOffset = Vector3.new(0, 3.4, 0)
+		bb.Parent = P.folder
+		local tl = Instance.new("TextLabel")
+		tl.Size = UDim2.new(1, 0, 1, 0)
+		tl.BackgroundTransparency = 1
+		tl.RichText = true
+		tl.Font = Enum.Font.GothamBold
+		tl.TextSize = 12
+		tl.TextColor3 = Color3.new(1, 1, 1)
+		tl.TextStrokeTransparency = 0.45
+		tl.Parent = bb
+		return {hl = hl, bb = bb, tl = tl}
+	end
+
+	function P.tick()
+		P.hooks()
+		local root = getRoot()
+		if not root then return end
+		if not P.folder or not P.folder.Parent then
+			P.folder = Instance.new("Folder")
+			P.folder.Name = "AM_PESP"
+			P.folder.Parent = ScreenGui.Parent
+			P.objs = {}
+		end
+		local list = {}
+		local me = getChar()
+		local function consider(m, name, kind)
+			local r = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+			local h = m:FindFirstChildOfClass("Humanoid")
+			if r and h and h.Health > 0 and m ~= me then
+				local d = (r.Position - root.Position).Magnitude
+				if d <= S.pespRange then list[#list + 1] = {m = m, r = r, h = h, d = d, name = name, kind = kind} end
+			end
+		end
+		if State.pespPlayers then
+			for _, pl in ipairs(Players:GetPlayers()) do
+				if pl ~= LocalPlayer and pl.Character then consider(pl.Character, pl.DisplayName, "P") end
+			end
+		end
+		if State.pespNPC then
+			for m in pairs(P.npc) do
+				if m.Parent then consider(m, m.Name, "N") else P.npc[m] = nil end
+			end
+		end
+		table.sort(list, function(a, b) return a.d < b.d end)
+		local keep = {}
+		for i = 1, math.min(#list, 30) do
+			local e = list[i]
+			local o = P.objs[e.m]
+			if not o then
+				o = make(e)
+				P.objs[e.m] = o
+			end
+			local col = (e.kind == "P") and Color3.fromRGB(80, 220, 255) or Color3.fromRGB(255, 120, 80)
+			o.hl.FillColor, o.hl.OutlineColor = col, col
+			if State.pespNames then
+				local hp, mx = math.floor(e.h.Health), math.max(math.floor(e.h.MaxHealth), 1)
+				local ratio = hp / mx
+				local hc = ratio > 0.6 and "#7CFC9A" or (ratio > 0.3 and "#FFD166" or "#FF6B6B")
+				o.tl.Text = '<font color="#FFE27A">' .. esc(e.name) .. '</font>\n<font color="' .. hc .. '">'
+					.. hp .. '/' .. mx .. '</font>  <font color="#C9CCE0">' .. math.floor(e.d) .. ' m</font>'
+				o.bb.Enabled = true
+			else
+				o.bb.Enabled = false
+			end
+			keep[e.m] = true
+		end
+		for m, o in pairs(P.objs) do
+			if not keep[m] then
+				o.hl:Destroy()
+				o.bb:Destroy()
+				P.objs[m] = nil
+			end
+		end
+	end
+
+	function P.stop()
+		stopLoop("pesp")
+		for _, o in pairs(P.objs) do
+			o.hl:Destroy()
+			o.bb:Destroy()
+		end
+		P.objs = {}
+		if P.folder then P.folder:Destroy() P.folder = nil end
+		if P.npcConn then P.npcConn:Disconnect() P.npcConn = nil end
+		P.npc = {}
+	end
+
+	function P.sync()
+		if State.pespPlayers or State.pespNPC then
+			if not Loops.pesp then startLoop("pesp", P.tick, function() return 0.2 end) end
+		else
+			P.stop()
+		end
+	end
+end
+
+-- ---------- TIỆN ÍCH MỚI: xem người chơi • đi bộ • anti void • auto đánh/click • nút E • camera • tự vào lại ----------
+do
+	local PathfindingService = svc("PathfindingService")
+	local GuiService = svc("GuiService")
+	local TeleportService = svc("TeleportService")
+
+	-- XEM CAMERA NGƯỜI CHƠI
+	local Spec = {target = nil}
+	Fx.Spec = Spec
+	function Spec.stop()
+		Spec.target = nil
+		stopLoop("spec")
+		local cam, h = workspace.CurrentCamera, getHum()
+		if cam and h then cam.CameraSubject = h end
+	end
+	function Spec.start(p)
+		local c = p and p.Character
+		local h = c and c:FindFirstChildOfClass("Humanoid")
+		if not h then toast("Không xem được người chơi này") return end
+		Spec.target = p
+		workspace.CurrentCamera.CameraSubject = h
+		toast("Đang xem: " .. p.DisplayName .. "  (bấm \"Dừng xem\" để thoát)")
+		startLoop("spec", function()
+			local pl = Spec.target
+			if not pl then return end
+			if not pl.Parent then Spec.stop() return end
+			local hh = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
+			local cam = workspace.CurrentCamera
+			if hh and cam.CameraSubject ~= hh then cam.CameraSubject = hh end
+		end, function() return 0.5 end)
+	end
+
+	-- ĐI BỘ TỚI MỘT ĐIỂM (tìm đường, không teleport)
+	local walkTok = 0
+	function Fx.walkStop()
+		walkTok = walkTok + 1
+		local h, r = getHum(), getRoot()
+		if h and r then h:MoveTo(r.Position) end
+	end
+	function Fx.walkTo(pos)
+		local hum, root = getHum(), getRoot()
+		if not hum or not root then return end
+		walkTok = walkTok + 1
+		local tok = walkTok
+		task.spawn(function()
+			local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true})
+			local ok = pcall(function() path:ComputeAsync(root.Position, pos) end)
+			if not ok or path.Status ~= Enum.PathStatus.Success then toast("Không tìm được đường đi") return end
+			toast("Đang đi bộ tới điểm...")
+			for _, wp in ipairs(path:GetWaypoints()) do
+				if walkTok ~= tok then return end
+				local h2 = getHum()
+				if not h2 then return end
+				if wp.Action == Enum.PathWaypointAction.Jump then h2.Jump = true end
+				h2:MoveTo(wp.Position)
+				h2.MoveToFinished:Wait()
+			end
+			if walkTok == tok then toast("Đã tới nơi") end
+		end)
+	end
+
+	-- ANTI VOID (rơi khỏi map → về chỗ đứng vững gần nhất)
+	local AV = {safe = nil}
+	Fx.AV = AV
+	function AV.tick()
+		local root, hum = getRoot(), getHum()
+		if not root or not hum then return end
+		local limit = math.max(workspace.FallenPartsDestroyHeight, -3000) + 80
+		local y = root.Position.Y
+		if hum.FloorMaterial ~= Enum.Material.Air and y > limit + 100 then
+			AV.safe = root.CFrame
+		elseif y < limit and AV.safe then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.CFrame = AV.safe + Vector3.new(0, 3, 0)
+			toast("Anti Void: đã về chỗ đứng an toàn")
+		end
+	end
+
+	-- AUTO ATTACK (kích hoạt Tool đang cầm) + AUTO CLICK
+	local AA = {}
+	Fx.AA = AA
+	function AA.tick()
+		local char, hum = getChar(), getHum()
+		if not char or not hum or hum.Health <= 0 then return end
+		local q = trim(Fx.aaFilter or ""):lower()
+		local function ok(t) return q == "" or t.Name:lower():find(q, 1, true) ~= nil end
+		local tool
+		for _, c in ipairs(char:GetChildren()) do
+			if c:IsA("Tool") and ok(c) then tool = c break end
+		end
+		if not tool and State.aaEquip then
+			local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+			if bp then
+				for _, c in ipairs(bp:GetChildren()) do
+					if c:IsA("Tool") and ok(c) then
+						pcall(function() hum:EquipTool(c) end)
+						tool = c
+						break
+					end
+				end
+			end
+		end
+		if tool then pcall(function() tool:Activate() end) end
+	end
+
+	local AC = {}
+	Fx.AC = AC
+	local function overGui()
+		if not Main.Visible then return false end
+		local p, sz = Main.AbsolutePosition, Main.AbsoluteSize
+		return Mouse.X >= p.X and Mouse.X <= p.X + sz.X and Mouse.Y >= p.Y and Mouse.Y <= p.Y + sz.Y
+	end
+	function AC.tick()
+		if UIS:GetFocusedTextBox() or overGui() then return end
+		if mouse1click then
+			pcall(mouse1click)
+		else
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton1(Vector2.new(0, 0))
+			end)
+		end
+	end
+
+	-- NÚT E (ProximityPrompt): bấm không cần giữ + tự bấm trong tầm
+	local PP = {set = setmetatable({}, {__mode = "k"}), bk = setmetatable({}, {__mode = "k"}),
+		last = setmetatable({}, {__mode = "k"}), conn = nil}
+	Fx.PP = PP
+	local function ppPos(d)
+		local par = d.Parent
+		if not par then return nil end
+		if par:IsA("BasePart") then return par.Position end
+		if par:IsA("Attachment") then return par.WorldPosition end
+		if par:IsA("Model") then return par:GetPivot().Position end
+		return nil
+	end
+	function PP.restore()
+		for d, h in pairs(PP.bk) do
+			if d.Parent then pcall(function() d.HoldDuration = h end) end
+		end
+		PP.bk = setmetatable({}, {__mode = "k"})
+	end
+	function PP.tick()
+		local root = getRoot()
+		if not root then return end
+		local q = trim(Fx.ppFilter or ""):lower()
+		local now = os.clock()
+		for d in pairs(PP.set) do
+			if not d.Parent then
+				PP.set[d] = nil
+			else
+				if State.ppInstant and d.HoldDuration ~= 0 then
+					if PP.bk[d] == nil then PP.bk[d] = d.HoldDuration end
+					d.HoldDuration = 0
+				end
+				if State.ppAuto and fireproximityprompt and d.Enabled and (not PP.last[d] or now - PP.last[d] > 0.5) then
+					local pos = ppPos(d)
+					if pos and (pos - root.Position).Magnitude <= S.ppRange then
+						local hay = (d.ActionText .. " " .. d.ObjectText .. " " .. (d.Parent and d.Parent.Name or "")):lower()
+						if q == "" or hay:find(q, 1, true) then
+							PP.last[d] = now
+							pcall(fireproximityprompt, d)
+						end
+					end
+				end
+			end
+		end
+	end
+	function PP.sync()
+		if State.ppInstant or State.ppAuto then
+			if not PP.conn then
+				local function add(d) if d:IsA("ProximityPrompt") then PP.set[d] = true end end
+				PP.conn = track(workspace.DescendantAdded:Connect(add))
+				task.spawn(function()
+					for i, d in ipairs(workspace:GetDescendants()) do
+						if i % 3000 == 0 then RunService.Heartbeat:Wait() end
+						add(d)
+					end
+				end)
+			end
+			if not Loops.pp then startLoop("pp", PP.tick, function() return 0.25 end) end
+		else
+			stopLoop("pp")
+			if PP.conn then PP.conn:Disconnect() PP.conn = nil end
+			PP.set = setmetatable({}, {__mode = "k"})
+		end
+		if not State.ppInstant then PP.restore() end
+	end
+
+	-- Tìm nút E gần một điểm (không quét cả map, chỉ hỏi các vật quanh điểm đó)
+	-- needEnabled: chỉ lấy nút đang bật • filter(d, dist) trả về điểm phạt (số nhỏ = ưu tiên) hoặc nil để bỏ qua nút đó
+	function PP.around(center, r, needEnabled, filter)
+		local parts = {}
+		pcall(function()
+			local op = OverlapParams.new()
+			op.FilterType = Enum.RaycastFilterType.Exclude
+			op.FilterDescendantsInstances = {getChar()}
+			parts = workspace:GetPartBoundsInRadius(center, r, op)
+		end)
+		local best, bs
+		local seen = {}
+		local function try(d)
+			if d and not seen[d] then
+				seen[d] = true
+				if needEnabled and not d.Enabled then return end
+				local pos = ppPos(d)
+				if pos then
+					local dist = (pos - center).Magnitude
+					if dist <= r then
+						local pen = 0
+						if filter then pen = filter(d, dist) end
+						if pen then
+							local s = dist + pen
+							if not bs or s < bs then best, bs = d, s end
+						end
+					end
+				end
+			end
+		end
+		for _, part in ipairs(parts) do
+			try(part:FindFirstChildOfClass("ProximityPrompt"))
+			for _, ch in ipairs(part:GetChildren()) do
+				if ch:IsA("Attachment") then try(ch:FindFirstChildOfClass("ProximityPrompt")) end
+			end
+			local m = part:FindFirstAncestorOfClass("Model")
+			if m then try(m:FindFirstChildOfClass("ProximityPrompt")) end
+		end
+		return best
+	end
+
+	-- BẤM E THỦ CÔNG: bấm nút E gần nhất (bạn tự đặt phím); không quét cả map, chỉ hỏi các vật quanh bạn
+	function PP.press(quiet)
+		local root = getRoot()
+		if not root then return false end
+		local r = S.ppManual
+		local best = PP.around(root.Position, r, true)
+		if not best then
+			if not quiet then toast("Không có nút E trong tầm " .. r .. " studs") end
+			return false
+		end
+		if fireproximityprompt then
+			pcall(fireproximityprompt, best)
+		else
+			pcall(function()
+				best:InputHoldBegin()
+				task.wait(math.max(best.HoldDuration, 0) + 0.05)
+				best:InputHoldEnd()
+			end)
+		end
+		if not quiet then
+			toast("Đã bấm E: " .. ((best.ActionText ~= "" and best.ActionText) or (best.Parent and best.Parent.Name) or "?"))
+		end
+		return true
+	end
+
+	-- ĐIỂM NÚT E: lưu chỗ có nút E → đi xa vẫn bấm được
+	-- Lưu: đường dẫn trong workspace + vị trí + chữ trên nút (chỉ số/chữ nên ghi được vào config, không giữ Instance).
+	-- Bấm: tìm lại nút (cache → đường dẫn → quanh vị trí đã lưu) rồi bấm.
+	--   Chế độ 1: bấm thẳng từ xa • Chế độ 2: TP tới nút → bấm → quay lại chỗ cũ (cho game có kiểm tra khoảng cách).
+	local EP = {cache = setmetatable({}, {__mode = "k"}), busy = false, homeCF = nil,
+		sel = math.max(1, math.floor(tonumber(Config.epSel) or 1))}
+	Fx.EP = EP
+
+	local function epPos(pt) return Vector3.new(pt.pos[1], pt.pos[2], pt.pos[3]) end
+
+	local function cutText(s, n)
+		local len = utf8.len(s)
+		if not len then return (s:gsub("[\128-\255]", "?")):sub(1, n) end
+		if len <= n then return s end
+		return s:sub(1, utf8.offset(s, n + 1) - 1)
+	end
+
+	-- con thứ k có tên `name` của `parent` (phân biệt các vật trùng tên)
+	local function nth(parent, name, k)
+		local n = 0
+		for _, ch in ipairs(parent:GetChildren()) do
+			if ch.Name == name then
+				n = n + 1
+				if n == k then return ch end
+			end
+		end
+		return nil
+	end
+	local function sibIndex(inst)
+		local n = 0
+		for _, ch in ipairs(inst.Parent:GetChildren()) do
+			if ch.Name == inst.Name then
+				n = n + 1
+				if ch == inst then return n end
+			end
+		end
+		return 1
+	end
+	local function pathOf(inst)
+		local names, idx = {}, {}
+		local a = inst
+		while a and a ~= workspace do
+			if not a.Parent then return nil end
+			table.insert(names, 1, a.Name)
+			table.insert(idx, 1, sibIndex(a))
+			a = a.Parent
+		end
+		if a ~= workspace then return nil end
+		return names, idx
+	end
+	local function pathKey(names, idx)
+		return table.concat(names, "/") .. "|" .. (idx and table.concat(idx, ",") or "")
+	end
+
+	function EP.cur()
+		if #epoints == 0 then return nil end
+		if EP.sel < 1 or EP.sel > #epoints then EP.sel = 1 end
+		return epoints[EP.sel]
+	end
+
+	function EP.select(i, quiet)
+		if not epoints[i] then return end
+		EP.sel = i
+		Config.epSel = i
+		saveConfig()
+		if not quiet then toast("Đang chọn: " .. epoints[i].name) end
+		if Fx.renderEP then Fx.renderEP() end
+	end
+
+	function EP.add(prompt, name)
+		local pos = ppPos(prompt)
+		if not pos then toast("Không đọc được vị trí của nút E này") return false end
+		local names, idx = pathOf(prompt)
+		if not names then toast("Nút E này nằm ngoài workspace") return false end
+		local key = pathKey(names, idx)
+		for i, pt in ipairs(epoints) do
+			if pathKey(pt.path, pt.idx) == key then
+				EP.select(i, true)
+				toast("Nút E này đã có trong list: " .. pt.name .. " (đã chọn)")
+				return false
+			end
+		end
+		name = trim(name or "")
+		if name == "" then
+			local a, o = prompt.ActionText, prompt.ObjectText
+			if a ~= "" and o ~= "" then name = o .. " - " .. a
+			elseif a ~= "" then name = a
+			elseif o ~= "" then name = o
+			else name = (prompt.Parent and prompt.Parent.Name) or "Nút E" end
+		end
+		name = cutText(name, 28)
+		local pt = {name = name, path = names, idx = idx, pos = {pos.X, pos.Y, pos.Z},
+			action = prompt.ActionText, object = prompt.ObjectText}
+		epoints[#epoints + 1] = pt
+		EP.cache[pt] = prompt
+		EP.sel = #epoints
+		Config.epSel = EP.sel
+		saveConfig()
+		if Fx.renderEP then Fx.renderEP() end
+		local root = getRoot()
+		local d = root and math.floor((pos - root.Position).Magnitude) or 0
+		toast("Đã lưu điểm E: " .. name .. "  (cách " .. d .. " m)")
+		return true
+	end
+
+	function EP.remove(i)
+		local pt = epoints[i]
+		if not pt then return end
+		table.remove(epoints, i)
+		EP.cache[pt] = nil
+		if EP.sel > i then EP.sel = EP.sel - 1 end
+		if EP.sel > #epoints then EP.sel = math.max(#epoints, 1) end
+		Config.epSel = EP.sel
+		saveConfig()
+		if Fx.renderEP then Fx.renderEP() end
+	end
+
+	-- Lưu nút E gần bạn nhất
+	function EP.saveNear(name)
+		local root = getRoot()
+		if not root then return false end
+		local p = PP.around(root.Position, 30, false)
+		if not p then toast("Không có nút E nào trong 30 studs quanh bạn") return false end
+		return EP.add(p, name)
+	end
+	-- Lưu nút E gần chỗ con trỏ đang trỏ (dùng với phím tắt: trỏ vào vật rồi bấm phím)
+	function EP.saveMouse(name)
+		local hit = Mouse.Hit
+		if not hit then toast("Hãy trỏ chuột vào vật có nút E") return false end
+		local p = PP.around(hit.Position, 12, false)
+		if not p then toast("Không có nút E nào gần chỗ con trỏ (12 studs)") return false end
+		return EP.add(p, name)
+	end
+
+	-- Tìm lại nút E của một điểm đã lưu (nil nếu chưa tải / đã bị xoá)
+	function EP.resolve(pt)
+		local c = EP.cache[pt]
+		if c and c.Parent and c:IsDescendantOf(workspace) then return c end
+		EP.cache[pt] = nil
+		-- 1) theo đường dẫn đã lưu
+		local cur = workspace
+		for i, n in ipairs(pt.path) do
+			cur = cur and nth(cur, n, (pt.idx and pt.idx[i]) or 1)
+			if not cur then break end
+		end
+		if cur and cur:IsA("ProximityPrompt") and cur.ActionText == pt.action and cur.ObjectText == pt.object then
+			EP.cache[pt] = cur
+			return cur
+		end
+		-- 2) theo vị trí đã lưu: ưu tiên nút trùng chữ; nút khác chữ chỉ nhận nếu nằm sát (≤ 4 studs)
+		local best = PP.around(epPos(pt), 15, false, function(d, dist)
+			if d.ActionText == pt.action and d.ObjectText == pt.object then return 0 end
+			if dist <= 4 then return 100 end
+			return nil
+		end)
+		if best then EP.cache[pt] = best end
+		return best
+	end
+
+	-- vị trí hiện tại của nút (nếu đang tải) hoặc vị trí đã lưu
+	function EP.where(pt)
+		local p = EP.cache[pt]
+		if p and p.Parent then
+			local pos = ppPos(p)
+			if pos then return pos end
+		end
+		return epPos(pt)
+	end
+
+	function EP.tp(pt)
+		teleportToCFrame(CFrame.new(EP.where(pt) + Vector3.new(0, 3, 0)))
+		toast("TP tới điểm E: " .. pt.name)
+	end
+
+	-- bấm 1 lần: tạm bỏ giữ / giới hạn khoảng cách / line-of-sight (chỉ phía client) rồi trả lại như cũ
+	local function fireE(prompt)
+		local hold, dist, los = prompt.HoldDuration, prompt.MaxActivationDistance, prompt.RequiresLineOfSight
+		pcall(function()
+			prompt.HoldDuration = 0
+			prompt.MaxActivationDistance = math.max(dist, 100000)
+			prompt.RequiresLineOfSight = false
+		end)
+		local ok
+		if fireproximityprompt then
+			ok = pcall(fireproximityprompt, prompt)
+		else
+			ok = pcall(function()
+				prompt:InputHoldBegin()
+				task.wait(0.05)
+				prompt:InputHoldEnd()
+			end)
+		end
+		task.wait(0.05)
+		pcall(function()
+			prompt.HoldDuration = hold
+			prompt.MaxActivationDistance = dist
+			prompt.RequiresLineOfSight = los
+		end)
+		return ok
+	end
+
+	function EP.run(pt, quiet)
+		local root = getRoot()
+		if not root then return false end
+		local home = root.CFrame
+		local moved = false
+
+		local function approach(pos)
+			local keep = prevCF
+			teleportToCFrame(CFrame.new(pos + Vector3.new(0, 3, 0)), true)
+			prevCF = keep
+			moved = true
+			EP.homeCF = home
+		end
+		local function back(waitFirst)
+			if not moved then return end
+			if waitFirst then task.wait(S.epWait) end
+			if getRoot() then
+				local keep = prevCF
+				teleportToCFrame(home, true)
+				prevCF = keep
+			end
+			moved, EP.homeCF = false, nil
+		end
+
+		local prompt = EP.resolve(pt)
+		local direct = (S.epMode ~= 2) and fireproximityprompt ~= nil
+		if not prompt then
+			-- chưa thấy nút (map chưa tải do StreamingEnabled) → bay tới chỗ đã lưu cho map tải ra, rồi thử lại
+			approach(epPos(pt))
+			local t0 = os.clock()
+			repeat
+				task.wait(0.15)
+				prompt = EP.resolve(pt)
+			until prompt or os.clock() - t0 > 3
+		elseif not direct then
+			approach(ppPos(prompt) or epPos(pt))
+		end
+		if not prompt then
+			back(false)
+			if not quiet then toast("Không thấy nút E ở điểm \"" .. pt.name .. "\" (đã bị xoá / đổi chỗ?)") end
+			return false
+		end
+		if moved then task.wait(S.epWait) end -- cho server nhận vị trí mới trước khi bấm
+		if not prompt.Enabled then
+			back(false)
+			if not quiet then toast("Nút E đang bị tắt: " .. pt.name) end
+			return false
+		end
+		local ok = fireE(prompt)
+		back(true)
+		if not quiet then toast(ok and ("Đã bấm E: " .. pt.name) or ("Bấm E thất bại: " .. pt.name)) end
+		return ok
+	end
+
+	function EP.press(pt, quiet)
+		if not pt then
+			if not quiet then toast("Chưa có điểm E nào — hãy lưu một điểm trước") end
+			return false
+		end
+		if EP.busy then
+			if not quiet then toast("Đang bấm điểm E khác, thử lại sau") end
+			return false
+		end
+		EP.busy = true
+		local ok, res = pcall(EP.run, pt, quiet)
+		EP.busy = false
+		if not ok then
+			warn("[AlienMango] điểm E: " .. tostring(res))
+			if EP.homeCF and getRoot() then
+				local keep = prevCF
+				teleportToCFrame(EP.homeCF, true)
+				prevCF = keep
+			end
+			EP.homeCF = nil
+			return false
+		end
+		return res and true or false
+	end
+
+	function EP.pressAll(quiet)
+		if #epoints == 0 then
+			if not quiet then toast("Chưa có điểm E nào") end
+			return
+		end
+		local snap = {}
+		for i, pt in ipairs(epoints) do snap[i] = pt end
+		local n = 0
+		for _, pt in ipairs(snap) do
+			if EP.press(pt, true) then n = n + 1 end
+			task.wait(0.1)
+		end
+		if not quiet then toast("Đã bấm " .. n .. "/" .. #snap .. " điểm E") end
+	end
+
+	-- CAMERA / THỜI GIAN
+	local Cam = {}
+	Fx.Cam = Cam
+	function Cam.fov(v)
+		if Cam.fovConn then Cam.fovConn:Disconnect() Cam.fovConn = nil end
+		local cam = workspace.CurrentCamera
+		if v then
+			if Cam.fov0 == nil then Cam.fov0 = cam.FieldOfView end
+			Cam.fovConn = track(RunService.RenderStepped:Connect(function()
+				local c = workspace.CurrentCamera
+				if c and c.FieldOfView ~= S.fov then c.FieldOfView = S.fov end
+			end))
+		elseif Cam.fov0 ~= nil then
+			cam.FieldOfView = Cam.fov0
+			Cam.fov0 = nil
+		end
+	end
+	function Cam.zoom(v)
+		stopLoop("zoom")
+		if v then
+			if not Cam.z0 then Cam.z0 = {LocalPlayer.CameraMaxZoomDistance, LocalPlayer.CameraMinZoomDistance} end
+			startLoop("zoom", function()
+				LocalPlayer.CameraMaxZoomDistance = S.zoomMax
+				LocalPlayer.CameraMinZoomDistance = 0
+			end, function() return 0.5 end)
+		elseif Cam.z0 then
+			LocalPlayer.CameraMaxZoomDistance = Cam.z0[1]
+			LocalPlayer.CameraMinZoomDistance = Cam.z0[2]
+			Cam.z0 = nil
+		end
+	end
+	function Cam.clock(v)
+		if Cam.clockConn then Cam.clockConn:Disconnect() Cam.clockConn = nil end
+		if v then
+			if Cam.c0 == nil then Cam.c0 = Lighting.ClockTime end
+			Cam.clockConn = track(RunService.RenderStepped:Connect(function() Lighting.ClockTime = S.clock end))
+		elseif Cam.c0 ~= nil then
+			Lighting.ClockTime = Cam.c0
+			Cam.c0 = nil
+		end
+	end
+
+	-- TỰ VÀO LẠI KHI BỊ KICK / MẤT KẾT NỐI
+	function Fx.autoRejoinOn(v)
+		if Fx.arConn then Fx.arConn:Disconnect() Fx.arConn = nil end
+		if not v then return end
+		Fx.arConn = track(GuiService.ErrorMessageChanged:Connect(function(msg)
+			if State.autoRejoin and msg and msg ~= "" then
+				toast("Mất kết nối → đang vào lại game...")
+				task.wait(3)
+				pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+			end
+		end))
 	end
 end
 
 -- =========================================================
 -- UI: CÁC TAB
 -- =========================================================
+
+-- ---------- TIỆN ÍCH MỚI 2: farm bám NPC • tự hồi máu • tuần tra • vòng FOV ----------
+do
+	Fx.t0 = os.clock()
+
+	-- AUTO FARM NPC: bay bám sau lưng NPC gần nhất (kết hợp Auto Attack / Auto Aim)
+	local AF = {npc = {}, conn = nil, hook = nil, target = nil, home = nil}
+	Fx.AF = AF
+	local function hookN(h)
+		if h:IsA("Humanoid") then
+			local m = h.Parent
+			if m and m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then AF.npc[m] = h end
+		end
+	end
+	local function rootOf(m) return m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart end
+	local function pick(root)
+		local q = trim(Fx.afFilter or ""):lower()
+		local best, bd
+		for m, h in pairs(AF.npc) do
+			if not m.Parent then
+				AF.npc[m] = nil
+			elseif h.Health > 0 and (q == "" or m.Name:lower():find(q, 1, true)) then
+				local r = rootOf(m)
+				if r then
+					local d = (r.Position - root.Position).Magnitude
+					if d <= S.afRange and (not bd or d < bd) then best, bd = m, d end
+				end
+			end
+		end
+		return best
+	end
+	function AF.stop(quiet)
+		if AF.conn then AF.conn:Disconnect() AF.conn = nil end
+		if AF.hook then AF.hook:Disconnect() AF.hook = nil end
+		AF.npc, AF.target = {}, nil
+		if not quiet and State.afReturn and AF.home then teleportToCFrame(AF.home, true) end
+		AF.home = nil
+	end
+	function AF.start()
+		AF.stop(true)
+		local root = getRoot()
+		AF.home = root and root.CFrame
+		AF.hook = track(workspace.DescendantAdded:Connect(hookN))
+		for i, d in ipairs(workspace:GetDescendants()) do
+			if i % 3000 == 0 then
+				RunService.Heartbeat:Wait()
+				if not State.autoFarm then return end
+			end
+			hookN(d)
+		end
+		if not State.autoFarm then return end
+		AF.conn = track(RunService.Heartbeat:Connect(function()
+			local r = getRoot()
+			if not r then return end
+			local t = AF.target
+			local th = t and AF.npc[t]
+			if not (t and t.Parent and th and th.Health > 0) then
+				t = pick(r)
+				AF.target = t
+			end
+			local tr = t and rootOf(t)
+			if tr then
+				local pos = tr.Position - tr.CFrame.LookVector * S.afDist + Vector3.new(0, S.afHeight, 0)
+				r.AssemblyLinearVelocity = Vector3.zero
+				r.CFrame = CFrame.new(pos, tr.Position)
+			end
+		end))
+	end
+
+	-- AUTO HEAL: dùng item (Tool) hồi máu khi máu thấp
+	local AH = {last = 0, used = 0}
+	Fx.AH = AH
+	function AH.tick()
+		local q = trim(Fx.healName or ""):lower()
+		if q == "" then return end
+		local ratio = Hp.ratio()
+		if not ratio or ratio <= 0 or ratio > S.healHp / 100 then return end
+		if os.clock() - AH.last < S.healCd then return end
+		local char, hum = getChar(), getHum()
+		if not char or not hum then return end
+		local function match(t) return t:IsA("Tool") and t.Name:lower():find(q, 1, true) ~= nil end
+		local tool
+		for _, c in ipairs(char:GetChildren()) do
+			if match(c) then tool = c break end
+		end
+		if not tool then
+			local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+			if bp then
+				for _, c in ipairs(bp:GetChildren()) do
+					if match(c) then tool = c break end
+				end
+			end
+			if tool then
+				pcall(function() hum:EquipTool(tool) end)
+				task.wait(0.1)
+			end
+		end
+		if tool then
+			AH.last = os.clock()
+			AH.used = AH.used + 1
+			pcall(function() tool:Activate() end)
+		end
+	end
+
+	-- TUẦN TRA: lần lượt đi qua các điểm đã lưu
+	local PT = {i = 0}
+	Fx.PT = PT
+	function PT.step()
+		if #points == 0 then return end
+		PT.i = PT.i % #points + 1
+		local cf = pointCF(points[PT.i])
+		if S.patrolMode == 2 then
+			Fx.walkTo(cf.Position)
+			local t0 = os.clock()
+			while State.patrol and os.clock() - t0 < 60 do
+				local r = getRoot()
+				if r and (r.Position - cf.Position).Magnitude < 6 then break end
+				task.wait(0.25)
+			end
+		else
+			teleportToCFrame(cf)
+		end
+		local t1 = os.clock()
+		while State.patrol and os.clock() - t1 < S.patrolWait do task.wait(0.1) end
+	end
+
+	-- VÒNG FOV của Auto Aim hiện trên màn hình
+	local FC = {}
+	Fx.FC = FC
+	function FC.sync()
+		if State.aimCircle then
+			if not FC.gui then
+				local g = Instance.new("ScreenGui")
+				g.Name, g.ResetOnSpawn, g.IgnoreGuiInset, g.DisplayOrder = "AM_FOV", false, true, 997
+				g.Parent = ScreenGui.Parent
+				local f = Instance.new("Frame")
+				f.AnchorPoint = Vector2.new(0.5, 0.5)
+				f.Position = UDim2.new(0.5, 0, 0.5, 0)
+				f.BackgroundTransparency = 1
+				f.Parent = g
+				local c = Instance.new("UICorner")
+				c.CornerRadius = UDim.new(0.5, 0)
+				c.Parent = f
+				local st = Instance.new("UIStroke")
+				st.Thickness, st.Transparency = 1.5, 0.25
+				st.Parent = f
+				bindAccent(st, "Color")
+				FC.gui, FC.frame = g, f
+			end
+			local d = S.aimFov * 2
+			FC.frame.Size = UDim2.new(0, d, 0, d)
+		elseif FC.gui then
+			FC.gui:Destroy()
+			FC.gui, FC.frame = nil, nil
+		end
+	end
+end
+
+-- ---------- TỔNG QUAN ----------
+do
+sideLabel("TỔNG QUAN")
+local pHome = newTab("HOME", "🏠", "Tổng quan")
+section(pHome, "THÔNG TIN")
+local info = note(pHome, "", 64)
+section(pHome, "ĐANG BẬT  (bấm tên = tới tab, TẮT = tắt ngay)")
+local HomeList = makeList(pHome)
+local lastSig
+UX.homeRefresh = function()
+	local ids = {}
+	for id, t in pairs(Toggles) do
+		if not t.opt and State[id] then ids[#ids + 1] = id end
+	end
+	table.sort(ids, function(a, b) return (Toggles[a].label or a):lower() < (Toggles[b].label or b):lower() end)
+	local k = Binds.uiToggle and getKey("uiToggle")
+	local r0 = getRoot()
+	local pp0 = r0 and r0.Position
+	local posTxt = pp0 and (math.floor(tonumber(pp0.X) or 0) .. ", " .. math.floor(tonumber(pp0.Y) or 0) .. ", " .. math.floor(tonumber(pp0.Z) or 0)) or "—"
+	info.Text = "Game ID: " .. PLACE .. "   •   " .. #Players:GetPlayers() .. " người trong server\n"
+		.. "Phím ẩn/hiện GUI: " .. (k and (KeyShort[k] or k) or "—") .. "   •   Bấm 🥭 để ẩn/hiện\n"
+		.. "Vị trí của bạn: " .. posTxt .. "\n"
+		.. "Phiên chạy: " .. string.format("%02d:%02d", math.floor((os.clock() - Fx.t0) / 60), math.floor(os.clock() - Fx.t0) % 60)
+		.. "   •   Đã gửi nhặt: " .. Loot.picked .. " item   •   Hồi máu: " .. Fx.AH.used .. " lần"
+	local sig = table.concat(ids, ",")
+	if sig == lastSig then return end
+	lastSig = sig
+	clearList(HomeList)
+	if #ids == 0 then emptyLabel(HomeList, "Chưa bật chức năng nào") return end
+	for i, id in ipairs(ids) do
+		local t = Toggles[id]
+		addListRow(HomeList, i, t.label or id, function()
+			local tab = UX.rev and UX.rev[t.page]
+			if tab then switchTab(tab) end
+		end, {{text = "TẮT", fn = function() t.set(false) end}}, nil)
+	end
+end
+section(pHome, "THAO TÁC NHANH")
+addAction(pHome, "offAll", "Tắt tất cả chức năng đang bật", nil, function()
+	local list = {}
+	for id, t in pairs(Toggles) do
+		if not t.opt and State[id] then list[#list + 1] = t end
+	end
+	for _, t in ipairs(list) do pcall(t.set, false) end
+	toast("Đã tắt " .. #list .. " chức năng")
+	UX.homeRefresh()
+end)
+addAction(pHome, "goSettings", "Mở cài đặt", nil, function() switchTab("SETTINGS") end)
+end
 
 -- ---------- MOVE ----------
 do
@@ -1895,18 +2944,51 @@ addToggle(pMove, "noclip",  "Noclip",     {key = "N", fn = function(v) if v then
 addToggle(pMove, "infjump", "Inf Jump",   {key = "J", fn = function(v) if v then startInfJump() else stopInfJump() end end})
 addToggle(pMove, "run",     "Run Speed",  {key = "X", fn = function(v) if v then startRun() else stopRun() end end})
 addToggle(pMove, "ragdoll", "Ragdoll",    {key = "R", fn = function(v) if v then startRagdoll() else stopRagdoll() end end})
+local jumpConn, defaultJump = nil, 50
+local function stopJump()
+	if jumpConn then jumpConn:Disconnect() jumpConn = nil end
+	local h = getHum()
+	if h then pcall(function() h.UseJumpPower = true h.JumpPower = defaultJump end) end
+end
+local function startJump()
+	local h = getHum()
+	if h then defaultJump = h.JumpPower end
+	if jumpConn then jumpConn:Disconnect() end
+	jumpConn = track(RunService.Heartbeat:Connect(function()
+		local hh = getHum()
+		if hh then
+			if not hh.UseJumpPower then hh.UseJumpPower = true end
+			if hh.JumpPower ~= S.jumpPower then hh.JumpPower = S.jumpPower end
+		end
+	end))
+end
+local origGrav
+local function setGravity(v)
+	if v then
+		if not origGrav then origGrav = workspace.Gravity end
+		workspace.Gravity = S.gravity
+	elseif origGrav then
+		workspace.Gravity = origGrav
+		origGrav = nil
+	end
+end
+addToggle(pMove, "jump", "Jump Power (nhảy cao)", {fn = function(v) if v then startJump() else stopJump() end end})
+addToggle(pMove, "lowgrav", "Gravity tuỳ chỉnh (trọng lực)", {fn = setGravity})
 section(pMove, "TỐC ĐỘ")
 addSlider(pMove, "flySpeed", "Fly speed", 1, 500, 1, 0)
 addSlider(pMove, "runSpeed", "Run speed", 1, 500, 1, 0)
-section(pMove, "FREECAM")
-addToggle(pMove, "freecam", "Freecam (giữ chuột phải để xoay)", {key = "G", fn = function(v) if v then Free.start() else Free.stop() end end})
-addToggle(pMove, "freecamFreeze", "Freecam: nhân vật đứng yên", {noKey = true, persist = true, default = true})
-addToggle(pMove, "freecamTP", "Tắt freecam → TP nhân vật tới camera", {noKey = true, persist = true, default = false})
-addSlider(pMove, "freecamSpeed", "Freecam speed", 1, 1000, 1, 0)
-note(pMove, "WASD đi • Space lên • Shift xuống • giữ Ctrl = nhanh x3 • giữ chuột phải + rê để xoay (mobile: kéo ngón tay).", 40)
+addSlider(pMove, "jumpPower", "Jump power", 10, 1000, 1, 0)
+addSlider(pMove, "gravity", "Gravity (mặc định 196)", 0, 400, 1, 0, function() if State.lowgrav then workspace.Gravity = S.gravity end end)
 section(pMove, "TELEPORT")
 addToggle(pMove, "clickTP", "Click TP (bấm là dịch chuyển)", {key = "T", fn = function() end})
 addToggle(pMove, "ctrlTP",  "Ctrl + Click = Teleport", {noKey = true, persist = true, default = true})
+addToggle(pMove, "smoothTP", "TP mượt (bay tới thay vì dịch chuyển tức thì)", {noKey = true, persist = true, default = false})
+addSlider(pMove, "tpSpeed", "Tốc độ TP mượt (studs/giây)", 20, 1000, 10, 0)
+note(pMove, "TP mượt áp dụng cho Click TP, điểm lưu, người chơi, Auto Loot bay, tuần tra... Thoát hiểm khi máu thấp vẫn dịch chuyển tức thì. Nên bật Noclip nếu đường đi có vật cản.", 52)
+section(pMove, "AN TOÀN")
+addToggle(pMove, "antivoid", "Anti Void (rơi khỏi map tự về chỗ cũ)", {fn = function(v)
+	if v then startLoop("antivoid", Fx.AV.tick, function() return 0.25 end) else stopLoop("antivoid") end
+end})
 end
 
 -- ---------- XE BAY (tab riêng) ----------
@@ -1930,8 +3012,93 @@ addToggle(pFarm, "autoAim", "Auto Aim NPC", {key = "V", fn = function(v) if v th
 addToggle(pFarm, "aimWall", "Kiểm tra vật cản (wall check)", {noKey = true, persist = true, default = true})
 addCycle(pFarm, "aimPartIdx", "Ngắm vào", {"Head", "Thân (RootPart)"})
 addSlider(pFarm, "aimRange", "Aim range (studs)", 10, 2000, 1, 0)
-addSlider(pFarm, "aimFov", "Aim FOV (pixel)", 50, 1500, 10, 0)
+addSlider(pFarm, "aimFov", "Aim FOV (pixel)", 50, 1500, 10, 0, function() if Fx.FC then Fx.FC.sync() end end)
+addToggle(pFarm, "aimCircle", "Hiện vòng FOV trên màn hình", {noKey = true, fn = function() Fx.FC.sync() end})
 addSlider(pFarm, "aimSmooth", "Độ mượt (1 = khoá cứng)", 0.05, 1, 0.05, 2)
+
+section(pFarm, "AUTO ATTACK / CLICK")
+addToggle(pFarm, "autoAttack", "Auto Attack (đánh bằng Tool đang cầm)", {fn = function(v)
+	if v then startLoop("aa", Fx.AA.tick, function() return S.aaDelay end) else stopLoop("aa") end
+end})
+addToggle(pFarm, "aaEquip", "Tự cầm Tool trong túi nếu chưa cầm", {noKey = true, persist = true, default = true})
+local AABox = addTextRow(pFarm, "Tên Tool (để trống = Tool nào cũng được)", "", {})
+AABox.FocusLost:Connect(function() Fx.aaFilter = AABox.Text end)
+addSlider(pFarm, "aaDelay", "Tốc độ đánh (giây)", 0.05, 2, 0.05, 2)
+addToggle(pFarm, "autoClick", "Auto Click (chuột trái)", {fn = function(v)
+	if v then startLoop("click", Fx.AC.tick, function() return 1 / math.max(S.clickCps, 1) end) else stopLoop("click") end
+end})
+addSlider(pFarm, "clickCps", "Tốc độ click (lần/giây)", 1, 30, 1, 0)
+note(pFarm, "Auto Click tạm dừng khi con trỏ đang nằm trên GUI này hoặc khi bạn đang gõ chữ.", 28)
+
+section(pFarm, "NÚT E (ProximityPrompt)")
+addToggle(pFarm, "ppInstant", "Bấm E không cần giữ (Instant)", {fn = function() Fx.PP.sync() end})
+addToggle(pFarm, "ppAuto", "Tự bấm E các nút trong tầm", {fn = function(v)
+	if v and not fireproximityprompt then toast("Executor không hỗ trợ fireproximityprompt") end
+	Fx.PP.sync()
+end})
+addSlider(pFarm, "ppRange", "Tầm tự bấm E (studs)", 3, 100, 1, 0)
+local PPBox = addTextRow(pFarm, "Lọc theo chữ trên nút (để trống = tất cả)", "", {})
+PPBox.FocusLost:Connect(function() Fx.ppFilter = PPBox.Text end)
+section(pFarm, "BẤM E THỦ CÔNG  (bấm ô phím bên phải để tự đặt phím)")
+addAction(pFarm, "ppPress", "Bấm E vào nút gần nhất", nil, function() Fx.PP.press() end)
+addToggle(pFarm, "ppSpam", "Bấm E liên tục vào nút gần nhất", {fn = function(v)
+	if v then
+		startLoop("ppspam", function() Fx.PP.press(true) end, function() return S.ppSpamDelay end)
+	else
+		stopLoop("ppspam")
+	end
+end})
+addSlider(pFarm, "ppManual", "Tầm bấm E thủ công (studs)", 3, 100, 1, 0)
+addSlider(pFarm, "ppSpamDelay", "Bấm liên tục mỗi (giây)", 0.05, 2, 0.05, 2)
+
+section(pFarm, "ĐIỂM NÚT E  (lưu chỗ → đi xa vẫn bấm được)")
+note(pFarm, "Đứng cạnh nút E rồi bấm \"+ LƯU\" (hoặc \"Lưu nút E gần nhất\") để lưu chỗ đó. Sau đó đi đâu cũng bấm được từ xa: bấm BẤM trong danh sách bên dưới, hoặc đặt phím cho \"Bấm điểm E đang chọn\". Điểm có ★ là điểm đang chọn (bấm tên để chọn). Điểm lưu theo từng game và được nhớ cho lần sau.", 66)
+local EPBox, epBtns = addTextRow(pFarm, "Tên điểm E (để trống = tự đặt theo chữ trên nút)", "", {"+ LƯU"})
+local function epSaveNear() if Fx.EP.saveNear(EPBox.Text) then EPBox.Text = "" end end
+epBtns[1].MouseButton1Click:Connect(epSaveNear)
+EPBox.FocusLost:Connect(function(enter) if enter then epSaveNear() end end)
+addAction(pFarm, "epSaveNear", "Lưu nút E gần nhất vào điểm", nil, epSaveNear)
+addAction(pFarm, "epSaveMouse", "Lưu nút E ở chỗ con trỏ (đặt phím, trỏ chuột vào vật rồi bấm phím)", nil, function() Fx.EP.saveMouse(EPBox.Text) end)
+local EPList = makeList(pFarm)
+Fx.renderEP = function()
+	clearList(EPList)
+	if #epoints == 0 then emptyLabel(EPList, "Chưa có điểm E nào") return end
+	local sel = Fx.EP.sel
+	for i, pt in ipairs(epoints) do
+		addListRow(EPList, i, (i == sel and "★ " or "") .. pt.name, function() Fx.EP.select(i) end, {
+			{text = "BẤM", fn = function() Fx.EP.press(pt) end},
+			{text = "TP", fn = function() Fx.EP.tp(pt) end},
+		}, function() Fx.EP.remove(i) end)
+	end
+end
+Fx.renderEP()
+addAction(pFarm, "epPressSel", "Bấm điểm E đang chọn (★)", nil, function() Fx.EP.press(Fx.EP.cur()) end)
+addAction(pFarm, "epPressAll", "Bấm TẤT CẢ điểm E đã lưu", nil, function() Fx.EP.pressAll() end)
+addToggle(pFarm, "epSpam", "Bấm liên tục điểm E", {fn = function(v)
+	if v then
+		if #epoints == 0 then toast("Chưa có điểm E nào — hãy lưu một điểm trước") end
+		startLoop("epspam", function()
+			if S.epTarget == 2 then Fx.EP.pressAll(true) else Fx.EP.press(Fx.EP.cur(), true) end
+		end, function() return S.epDelay end)
+	else
+		stopLoop("epspam")
+	end
+end})
+addCycle(pFarm, "epTarget", "Bấm liên tục", {"Điểm đang chọn (★)", "Tất cả (lần lượt)"})
+addCycle(pFarm, "epMode", "Cách bấm từ xa", {"Từ xa (không TP)", "TP tới → bấm → về"})
+addSlider(pFarm, "epDelay", "Bấm liên tục mỗi (giây)", 0.05, 10, 0.05, 2)
+addSlider(pFarm, "epWait", "Chờ server nhận (giây) — chế độ TP", 0.05, 2, 0.05, 2)
+note(pFarm, "\"Từ xa\": gửi lệnh bấm thẳng, không cần đứng gần (đa số game cho phép). Nếu bấm mà game không phản hồi (server kiểm tra khoảng cách) thì chọn \"TP tới → bấm → về\": script dịch chuyển tới nút, bấm, rồi quay lại chỗ cũ. Nếu nút E nằm ngoài vùng map đang tải, script cũng tự bay tới chỗ đã lưu để bấm rồi quay lại.", 66)
+
+section(pFarm, "AUTO FARM NPC  (bay bám NPC gần nhất)")
+addToggle(pFarm, "autoFarm", "Auto Farm NPC", {key = "F6", fn = function(v) if v then Fx.AF.start() else Fx.AF.stop() end end})
+addToggle(pFarm, "afReturn", "Tắt farm → quay về chỗ bắt đầu", {noKey = true, persist = true, default = true})
+local AFBox = addTextRow(pFarm, "Chỉ NPC có tên chứa (để trống = tất cả)", "", {})
+AFBox.FocusLost:Connect(function() Fx.afFilter = AFBox.Text end)
+addSlider(pFarm, "afRange", "Tầm tìm NPC (studs)", 10, 2000, 5, 0)
+addSlider(pFarm, "afDist", "Đứng cách NPC (âm = trước mặt)", -20, 40, 1, 0)
+addSlider(pFarm, "afHeight", "Độ cao so với NPC", -10, 40, 1, 0)
+note(pFarm, "Tự bay tới sau lưng NPC gần nhất và bám theo cho tới khi nó chết, rồi chuyển NPC kế. Bật thêm Auto Attack + Auto Aim ở trên để tự đánh. Bật Tự thoát khi máu thấp (tab Tiện ích) cho an toàn.", 52)
 end
 
 -- ---------- LOOT ----------
@@ -1946,11 +3113,20 @@ addToggle(pLoot, "autoLoot", "Auto Loot", {key = "F4", fn = function(v)
 		startLoop("loot", Loot.tick, function() return S.lootDelay end)
 	else
 		stopLoop("loot")
+		Loot.home = nil
 	end
 end})
 addCycle(pLoot, "lootMode", "Nhặt", {"Tất cả item", "Chỉ item trong list"})
 addSlider(pLoot, "lootRadius", "Bán kính nhặt (studs)", 5, 10000, 1, 0)
 addSlider(pLoot, "lootDelay", "Tốc độ quét (giây)", 0.05, 2, 0.05, 2)
+addSlider(pLoot, "lootMax", "Số item nhặt mỗi lần quét", 1, 100, 1, 0)
+section(pLoot, "NÂNG CAO")
+addToggle(pLoot, "lootInstant", "Nhặt ngay khi item vừa xuất hiện", {noKey = true, persist = true, default = false, initCall = true, fn = function(v) Loot.instantOn(v) end})
+addToggle(pLoot, "lootTP", "Bay tới item ở xa để nhặt", {noKey = true, persist = true, default = false})
+addToggle(pLoot, "lootReturn", "Nhặt xong tự quay lại chỗ cũ", {noKey = true, persist = true, default = true})
+addSlider(pLoot, "lootTPRange", "Tầm tìm item ở xa (studs)", 20, 5000, 10, 0)
+Loot.stat = note(pLoot, "Đã gửi lệnh nhặt: 0 item", 18)
+note(pLoot, "Nhặt gần nhất trước, mỗi item chỉ gửi 1 lần/giây để khỏi spam. \"Bay tới item\" là dịch chuyển nên game có thể giật lại nếu có chống teleport.", 40)
 note(pLoot, "Gửi lệnh Pickup tới server cho item trong workspace.Items nằm trong bán kính. Bán kính quá lớn có thể gây lag.", 40)
 
 section(pLoot, "CHỌN ITEM CẦN NHẶT")
@@ -2003,179 +3179,6 @@ addAction(pLoot, "clearLoot", "Xoá toàn bộ list LOOT", nil, function()
 end)
 ScanList = makeList(pLoot)
 emptyLabel(ScanList, "Bấm \"Quét item hiện có\" để xem danh sách")
-end
-
--- ---------- BÁN (Auto Sell) ----------
-do
-local pSell = newTab("SELL", "💰", "Bán")
-local Sell = {target = nil, deskCF = nil}
-local SellList
-
-local function promptPos(o)
-	local p = o.Parent
-	if not p then return nil end
-	if p:IsA("BasePart") then return p.Position end
-	if p:IsA("Attachment") then return p.WorldPosition end
-	if p:IsA("Model") then return p:GetPivot().Position end
-	local bp = o:FindFirstAncestorWhichIsA("BasePart")
-	return bp and bp.Position
-end
-local function targetPos(t)
-	if t:IsA("ProximityPrompt") then return promptPos(t) end
-	return t.Parent and t.Parent:IsA("BasePart") and t.Parent.Position or nil
-end
-local function fireTarget(t)
-	if not t or not t.Parent then return false end
-	if t:IsA("ProximityPrompt") then
-		if fireproximityprompt then
-			fireproximityprompt(t)
-		else
-			t:InputHoldBegin()
-			task.wait(math.max(t.HoldDuration, 0) + 0.05)
-			t:InputHoldEnd()
-		end
-		return true
-	elseif t:IsA("ClickDetector") and fireclickdetector then
-		fireclickdetector(t)
-		return true
-	end
-	return false
-end
-
-local function describe(d, dist)
-	local what
-	if d:IsA("ProximityPrompt") then
-		what = "[E] " .. (d.ActionText ~= "" and d.ActionText or "?") .. (d.ObjectText ~= "" and (" / " .. d.ObjectText) or "")
-	else
-		what = "[Click]"
-	end
-	local par = d.Parent and d.Parent.Name or "?"
-	return what .. "  ·  " .. par .. "  ·  " .. math.floor(dist) .. "m" .. (Sell.target == d and "  ✓" or "")
-end
-
-function Sell.scan()
-	if not SellList then return end
-	clearList(SellList)
-	local root = getRoot()
-	if not root then return end
-	local found = {}
-	for i, d in ipairs(workspace:GetDescendants()) do
-		if i % 4000 == 0 then RunService.Heartbeat:Wait() end
-		if d:IsA("ProximityPrompt") or d:IsA("ClickDetector") then
-			local pos = targetPos(d)
-			if pos then
-				local dist = (pos - root.Position).Magnitude
-				if dist <= S.sellRange then found[#found + 1] = {inst = d, dist = dist} end
-			end
-		end
-	end
-	table.sort(found, function(a, b) return a.dist < b.dist end)
-	if #found == 0 then emptyLabel(SellList, "Không thấy nút nào trong bán kính") return end
-	for i = 1, math.min(#found, 25) do
-		local f = found[i]
-		local function choose()
-			Sell.target = f.inst
-			toast("Đã chọn nút tính tiền: " .. (f.inst.Parent and f.inst.Parent.Name or "?"))
-			Sell.scan()
-		end
-		addListRow(SellList, i, describe(f.inst, f.dist), choose, {
-			{text = "FIRE", fn = function()
-				local ok = fireTarget(f.inst)
-				toast(ok and "Đã kích hoạt thử" or "Executor không hỗ trợ fire")
-			end},
-			{text = "CHỌN", fn = choose},
-		}, nil)
-	end
-end
-
-function Sell.pull()
-	local folder = workspace:FindFirstChild("Items")
-	if not folder then return end
-	local base = Sell.deskCF and Sell.deskCF.Position or (Sell.target and targetPos(Sell.target))
-	if not base then return end
-	for _, it in ipairs(folder:GetChildren()) do
-		if Loot.wanted(it.Name) then
-			local off = Vector3.new(math.random(-20, 20) / 10, 2.5, math.random(-20, 20) / 10)
-			if it:IsA("Model") then
-				pcall(function() it:PivotTo(CFrame.new(base + off)) end)
-			elseif it:IsA("BasePart") then
-				pcall(function() it.CFrame = CFrame.new(base + off) end)
-			end
-		end
-	end
-end
-
-function Sell.tick()
-	local t = Sell.target
-	if not t or not t.Parent then return end
-	local root = getRoot()
-	if not root then return end
-	if State.sellPull then Sell.pull() end
-	local pos = targetPos(t)
-	if State.sellTP and pos then
-		local reach = math.min(t.MaxActivationDistance, 10)
-		if (root.Position - pos).Magnitude > reach - 1 then
-			teleportToCFrame(CFrame.new(pos + Vector3.new(0, 3, 4)))
-			task.wait(0.15)
-		end
-	end
-	fireTarget(t)
-end
-
-function Sell.remotes()
-	local keys = {"sell", "buy", "cash", "shop", "trade", "coin", "money", "pay", "purchase", "register"}
-	local n, total = 0, 0
-	print("[AlienMango] Remote có tên liên quan tới bán/mua:")
-	for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
-		if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
-			total = total + 1
-			local l = d.Name:lower()
-			for _, k in ipairs(keys) do
-				if l:find(k, 1, true) then
-					n = n + 1
-					print("   " .. d.ClassName .. "  " .. d:GetFullName())
-					break
-				end
-			end
-		end
-	end
-	toast("Tìm thấy " .. n .. "/" .. total .. " remote liên quan (xem F9)")
-end
-
-section(pSell, "MÁY TÍNH TIỀN")
-note(pSell, "1) Đứng gần máy tính tiền rồi bấm \"Dò nút quanh đây\".\n2) Bấm FIRE thử từng nút; nút nào làm máy tính tiền thì bấm CHỌN.\n3) Bật Auto Bán.", 56)
-addAction(pSell, "sellScan", "Dò nút quanh đây (ProximityPrompt / Click)", nil, function() Sell.scan() end)
-SellList = makeList(pSell)
-emptyLabel(SellList, "Bấm \"Dò nút quanh đây\" để xem danh sách")
-
-section(pSell, "AUTO BÁN")
-addToggle(pSell, "autoSell", "Auto Bán", {key = "F5", fn = function(v)
-	if v then
-		if not Sell.target then
-			toast("Chưa chọn nút tính tiền — hãy dò và CHỌN trước")
-			Toggles.autoSell.set(false)
-			return
-		end
-		startLoop("sell", Sell.tick, function() return S.sellDelay end)
-	else
-		stopLoop("sell")
-	end
-end})
-addToggle(pSell, "sellTP", "Tự TP tới máy khi đứng xa", {noKey = true, persist = true, default = true})
-addToggle(pSell, "sellPull", "Kéo item trong workspace.Items lên bàn (thử nghiệm)", {noKey = true, persist = true, default = false})
-addSlider(pSell, "sellDelay", "Chu kỳ bán (giây)", 0.2, 30, 0.1, 1)
-addSlider(pSell, "sellRange", "Bán kính dò nút (studs)", 10, 200, 5, 0)
-section(pSell, "KHÁC")
-addAction(pSell, "sellOnce", "Bán 1 lần ngay", nil, function()
-	if not Sell.target then toast("Chưa chọn nút tính tiền") return end
-	task.spawn(Sell.tick)
-end)
-addAction(pSell, "setDesk", "Đặt điểm bàn bán tại vị trí này", nil, function()
-	local r = getRoot()
-	if r then Sell.deskCF = r.CFrame toast("Đã đặt điểm bàn bán") end
-end)
-addAction(pSell, "sellRemotes", "Dò Remote liên quan tới bán/mua (xem F9)", nil, Sell.remotes)
-note(pSell, "\"Kéo item lên bàn\" chỉ đổi vị trí vật trên máy bạn, có thể server không nhận. Nếu item của bạn nằm trong túi (Backpack) thì cần biết game đặt item lên bàn bằng cách nào.", 56)
 end
 
 -- ---------- PLAYER ----------
@@ -2238,8 +3241,9 @@ plBtns[1].MouseButton1Click:Connect(tpByBox)
 PlBox.FocusLost:Connect(function(enter) if enter then tpByBox() end end)
 addAction(pPl, "tpNextPlayer", "TP tới người chơi kế tiếp", "U", tpNext)
 addAction(pPl, "tpNearPlayer", "TP tới người chơi gần nhất", nil, tpNear)
+addAction(pPl, "specStop", "Dừng xem (về camera của mình)", nil, function() Fx.Spec.stop() end)
 
-section(pPl, "TRONG SERVER  (bấm tên = TP)")
+section(pPl, "TRONG SERVER  (bấm tên = TP, XEM = xem camera họ)")
 local PlList = makeList(pPl)
 local function render()
 	clearList(PlList)
@@ -2249,7 +3253,7 @@ local function render()
 		if q == "" or p.Name:lower():find(q, 1, true) or p.DisplayName:lower():find(q, 1, true) then
 			shown = shown + 1
 			addListRow(PlList, i, p.DisplayName .. "  (@" .. p.Name .. ")", function() tpPlayer(p) end,
-				{{text = "TP", fn = function() tpPlayer(p) end}}, nil)
+				{{text = "TP", fn = function() tpPlayer(p) end}, {text = "XEM", fn = function() Fx.Spec.start(p) end}}, nil)
 		end
 	end
 	if shown == 0 then emptyLabel(PlList, "Không có người chơi nào") end
@@ -2264,11 +3268,12 @@ end
 do
 local pEsp = newTab("ESP", "👁", "ESP")
 section(pEsp, "ESP TÊN ITEM")
-note(pEsp, "Hiện tên + khoảng cách trên đầu vật để biết tên đúng. Vật cùng tên nằm sát nhau được gộp thành \"Tên ×N\".", 40)
+note(pEsp, "Hiện tên + khoảng cách trên đầu vật để biết tên đúng. Vật cùng tên nằm sát nhau được gộp thành \"Tên ×N\". Mặc định chỉ quét workspace.Items nên không lag.", 52)
 addToggle(pEsp, "esp", "Bật ESP", {key = "Y", fn = function(v) if v then ESP.start() else ESP.stop() end end})
 
 section(pEsp, "BỘ LỌC")
 addCycle(pEsp, "espMode", "Hiện", {"Tất cả", "Chỉ item trong list LOOT"})
+addCycle(pEsp, "espSrc", "Nguồn quét", {"workspace.Items (nhẹ)", "Toàn bộ workspace (nặng)"})
 local EspBox = addTextRow(pEsp, "Lọc theo tên (để trống = không lọc)", "", {})
 EspBox.FocusLost:Connect(function() ESP.filter = EspBox.Text end)
 
@@ -2276,6 +3281,13 @@ section(pEsp, "HIỂN THỊ")
 addSlider(pEsp, "espRange", "Phạm vi (studs)", 10, 2000, 10, 0)
 addSlider(pEsp, "espMax", "Số nhãn tối đa", 5, 200, 5, 0)
 addSlider(pEsp, "espSize", "Cỡ chữ nhãn", 9, 22, 1, 0)
+
+section(pEsp, "ESP NGƯỜI CHƠI / NPC  (viền sáng xuyên tường)")
+addToggle(pEsp, "pespPlayers", "Người chơi", {fn = function() Fx.PESP.sync() end})
+addToggle(pEsp, "pespNPC", "NPC / quái", {fn = function() Fx.PESP.sync() end})
+addToggle(pEsp, "pespNames", "Hiện tên + máu + khoảng cách", {noKey = true, persist = true, default = true})
+addSlider(pEsp, "pespRange", "Phạm vi (studs)", 50, 5000, 50, 0)
+note(pEsp, "Roblox chỉ vẽ tối đa khoảng 31 viền cùng lúc nên chỉ hiện 30 mục gần nhất.", 28)
 end
 
 -- ---------- POINTS ----------
@@ -2285,7 +3297,37 @@ section(pPoints, "PHÍM TẮT")
 addAction(pPoints, "savePoint", "Lưu điểm tại vị trí hiện tại", "K", function() addPoint(nil) end)
 addAction(pPoints, "lastPoint", "Về điểm lưu cuối", "L", teleportLastPoint)
 addAction(pPoints, "backTP", "Quay lại vị trí trước khi TP", nil, teleportBack)
-section(pPoints, "LƯU ĐIỂM CÓ TÊN  (điểm lưu riêng cho từng game)")
+addAction(pPoints, "walkStop", "Dừng đi bộ", nil, function() Fx.walkStop() toast("Đã dừng đi bộ") end)
+addAction(pPoints, "copyPos", "Sao chép toạ độ hiện tại (CFrame.new)", nil, function()
+	local r = getRoot()
+	if not r then return end
+	local pp = r.Position
+	local txt = string.format("CFrame.new(%.1f, %.1f, %.1f)", pp.X, pp.Y, pp.Z)
+	if setclipboard then
+		setclipboard(txt)
+		toast("Đã chép: " .. txt)
+	else
+		print("[AlienMango] " .. txt)
+		toast("Executor không có clipboard — xem F9: " .. txt)
+	end
+end)
+section(pPoints, "TUẦN TRA  (lần lượt đi qua các điểm đã lưu)")
+addToggle(pPoints, "patrol", "Tuần tra các điểm", {key = "F7", fn = function(v)
+	if v then
+		if #points == 0 then
+			toast("Chưa có điểm nào — hãy lưu điểm trước")
+			Toggles.patrol.set(false)
+			return
+		end
+		startLoop("patrol", Fx.PT.step, function() return 0.1 end)
+	else
+		stopLoop("patrol")
+		if S.patrolMode == 2 then Fx.walkStop() end
+	end
+end})
+addCycle(pPoints, "patrolMode", "Cách di chuyển", {"Teleport", "Đi bộ (tìm đường)"})
+addSlider(pPoints, "patrolWait", "Dừng ở mỗi điểm (giây)", 0.5, 120, 0.5, 1)
+section(pPoints, "LƯU ĐIỂM CÓ TÊN  (bấm tên = TP, ĐI = đi bộ tới)")
 local PointBox, pointBtns = addTextRow(pPoints, "Tên điểm...", "", {"+ LƯU"})
 pointBtns[1].MouseButton1Click:Connect(function() addPoint(PointBox.Text) PointBox.Text = "" end)
 PointBox.FocusLost:Connect(function(enter) if enter then addPoint(PointBox.Text) PointBox.Text = "" end end)
@@ -2294,7 +3336,8 @@ renderPoints = function()
 	clearList(PointsList)
 	if #points == 0 then emptyLabel(PointsList, "Chưa có điểm nào") return end
 	for i, pt in ipairs(points) do
-		addListRow(PointsList, i, pt.name, function() teleportToCFrame(pointCF(pt)) end, {},
+		addListRow(PointsList, i, pt.name, function() teleportToCFrame(pointCF(pt)) end,
+			{{text = "ĐI", fn = function() Fx.walkTo(pointCF(pt).Position) end}},
 			function() table.remove(points, i) saveConfig() renderPoints() end)
 	end
 end
@@ -2307,6 +3350,25 @@ sideLabel("HỆ THỐNG")
 local pMisc = newTab("MISC", "✨", "Tiện ích")
 section(pMisc, "HIỂN THỊ")
 addToggle(pMisc, "fullbright", "Fullbright", {key = "B", fn = function(v) if v then startFullbright() else stopFullbright() end end})
+local origFps
+addToggle(pMisc, "fpsOn", "Mở khoá FPS", {fn = function(v)
+	if not setfpscap then toast("Executor không hỗ trợ setfpscap") return end
+	if v then
+		if not origFps then origFps = (getfpscap and getfpscap()) or 60 end
+		setfpscap(S.fpsCap)
+	elseif origFps then
+		setfpscap(origFps)
+		origFps = nil
+	end
+end})
+addSlider(pMisc, "fpsCap", "Giới hạn FPS", 30, 360, 1, 0, function() if State.fpsOn and setfpscap then setfpscap(S.fpsCap) end end)
+section(pMisc, "CAMERA / THỜI GIAN")
+addToggle(pMisc, "fovOn", "FOV tuỳ chỉnh", {fn = function(v) Fx.Cam.fov(v) end})
+addSlider(pMisc, "fov", "FOV (mặc định 70)", 30, 120, 1, 0)
+addToggle(pMisc, "zoomOn", "Zoom camera xa hơn", {fn = function(v) Fx.Cam.zoom(v) end})
+addSlider(pMisc, "zoomMax", "Zoom tối đa (studs)", 128, 10000, 1, 0)
+addToggle(pMisc, "clockOn", "Khoá giờ trong game", {fn = function(v) Fx.Cam.clock(v) end})
+addSlider(pMisc, "clock", "Giờ (0 - 24)", 0, 24, 0.1, 1)
 section(pMisc, "GIẢM LAG")
 addToggle(pMisc, "antiLag", "Giảm Lag", {key = "F", fn = function(v) if v then Lag.on() else Lag.off() end end})
 addCycle(pMisc, "lagLevel", "Mức giảm lag", {"1 • Nhẹ", "2 • Vừa", "3 • Mạnh", "4 • Cực mạnh"})
@@ -2325,6 +3387,18 @@ addToggle(pMisc, "escapeOnce", "Chỉ thoát 1 lần rồi tự tắt", {noKey =
 addSlider(pMisc, "escapeHp", "Thoát khi máu ≤ (%)", 5, 90, 5, 0)
 addAction(pMisc, "setSafe", "Đặt điểm an toàn tại vị trí này", nil, Safe.set)
 addToggle(pMisc, "respawnBack", "Chết xong → hồi sinh về chỗ vừa chết", {noKey = true, persist = true, default = false})
+addToggle(pMisc, "autoHeal", "Tự dùng item hồi máu khi máu thấp", {fn = function(v)
+	if v then
+		if trim(Fx.healName or "") == "" then toast("Hãy nhập tên Tool hồi máu ở ô bên dưới") end
+		startLoop("heal", Fx.AH.tick, function() return 0.2 end)
+	else
+		stopLoop("heal")
+	end
+end})
+local HealBox = addTextRow(pMisc, "Tên Tool hồi máu (gõ một phần cũng được)", "", {})
+HealBox.FocusLost:Connect(function() Fx.healName = HealBox.Text end)
+addSlider(pMisc, "healHp", "Dùng khi máu ≤ (%)", 5, 95, 5, 0)
+addSlider(pMisc, "healCd", "Chờ giữa 2 lần dùng (giây)", 0.5, 30, 0.5, 1)
 section(pMisc, "ĐỌC MÁU CỦA GAME")
 addAction(pMisc, "hpReport", "Kiểm tra nguồn máu của game", nil, function() Hp.report() end)
 local HpBox = addTextRow(pMisc, "Tên giá trị máu (để trống = tự dò)", Hp.name, {})
@@ -2335,6 +3409,36 @@ HpBox.FocusLost:Connect(function()
 	Hp.cur, Hp.max, Hp.peak = nil, nil, 0
 	Hp.scan()
 end)
+section(pMisc, "SERVER")
+addAction(pMisc, "rejoin", "Vào lại server này (Rejoin)", nil, function()
+	toast("Đang vào lại server...")
+	pcall(function() svc("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer) end)
+end)
+addAction(pMisc, "hop", "Đổi server (ưu tiên ít người)", nil, function()
+	task.spawn(function()
+		toast("Đang tìm server...")
+		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+		local body
+		local reqf = request or http_request or (syn and syn.request)
+		if reqf then
+			local ok, res = pcall(reqf, {Url = url, Method = "GET"})
+			if ok and type(res) == "table" and res.Body then body = res.Body end
+		end
+		if not body then pcall(function() body = game:HttpGet(url) end) end
+		if not body then toast("Executor không gọi được web (HttpGet/request)") return end
+		local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+		if not ok or type(data) ~= "table" or type(data.data) ~= "table" then toast("Không đọc được danh sách server") return end
+		for _, sv in ipairs(data.data) do
+			if sv.id ~= game.JobId and sv.playing and sv.maxPlayers and sv.playing < sv.maxPlayers then
+				toast("Chuyển sang server " .. sv.playing .. "/" .. sv.maxPlayers .. " người...")
+				pcall(function() svc("TeleportService"):TeleportToPlaceInstance(game.PlaceId, sv.id, LocalPlayer) end)
+				return
+			end
+		end
+		toast("Không có server khác còn chỗ")
+	end)
+end)
+addToggle(pMisc, "autoRejoin", "Tự vào lại game khi bị kick / mất kết nối", {noKey = true, persist = true, default = false, initCall = true, fn = function(v) Fx.autoRejoinOn(v) end})
 section(pMisc, "HỆ THỐNG")
 addToggle(pMisc, "antiAFK", "Anti AFK (không bị kick khi đứng yên)", {noKey = true, persist = true, default = true, initCall = true, fn = setAntiAFK})
 end
@@ -2461,6 +3565,36 @@ addAction(pSet, "_saveNow", CanFS and "Lưu config ngay" or "Executor không h�
 	flushConfig()
 	toast(CanFS and "Đã lưu config" or "Không thể lưu")
 end)
+section(pSet, "SAO LƯU / NẠP CONFIG")
+addAction(pSet, "_exportCfg", "Sao chép config (JSON) vào clipboard", nil, function()
+	local ok, js = pcall(function() return HttpService:JSONEncode(Config) end)
+	if not ok then toast("Không mã hoá được config") return end
+	if setclipboard then
+		setclipboard(js)
+		toast("Đã chép config (" .. #js .. " ký tự)")
+	else
+		print("[AlienMango] " .. js)
+		toast("Executor không có clipboard — xem F9")
+	end
+end)
+local ImpBox, impBtns = addTextRow(pSet, "Dán JSON config rồi bấm NẠP...", "", {"NẠP"})
+impBtns[1].MouseButton1Click:Connect(function()
+	local ok, data = pcall(function() return HttpService:JSONDecode(ImpBox.Text) end)
+	if not ok or type(data) ~= "table" then toast("JSON không hợp lệ") return end
+	for k, v in pairs(data) do Config[k] = v end
+	flushConfig()
+	ImpBox.Text = ""
+	toast("Đã nạp config — script tự gỡ, hãy chạy lại")
+	task.delay(1.2, function() unload() end)
+end)
+addAction(pSet, "_resetCfg", "Xoá toàn bộ config về mặc định (tự gỡ script)", nil, function()
+	for k in pairs(Config) do Config[k] = nil end
+	Config.keys, Config.values, Config.options, Config.points, Config.collapsed = {}, {}, {}, {}, {}
+	Config.lists = {bring = {}, loot = {}}
+	flushConfig()
+	toast("Đã xoá config — script tự gỡ, hãy chạy lại")
+	task.delay(1.2, function() unload() end)
+end)
 addAction(pSet, "_unload", "Gỡ script (tắt hết mọi thứ)", nil, function() unload() end)
 
 -- =========================================================
@@ -2508,7 +3642,6 @@ end))
 track(LocalPlayer.CharacterAdded:Connect(function()
 	if State.fly then Toggles.fly.set(false) end
 	if State.ragdoll then Toggles.ragdoll.set(false) end
-	if State.freecam then Toggles.freecam.set(false) end
 end))
 
 -- =========================================================
@@ -2519,7 +3652,7 @@ local Footer = new("Frame", {Position = UDim2.new(0, 0, 1, -FOOT), Size = UDim2.
 local FLeft = new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 14, 0, 0),
 	BackgroundTransparency = 1, Text = "", TextColor3 = Theme.SubText, Font = Enum.Font.GothamMedium,
 	TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left}, Footer)
-local FRight = new("TextLabel", {Size = UDim2.new(0.4, -14, 1, 0), Position = UDim2.new(0.6, 0, 0, 0),
+local FRight = new("TextLabel", {Size = UDim2.new(0.4, -34, 1, 0), Position = UDim2.new(0.6, 0, 0, 0),
 	BackgroundTransparency = 1, Text = "", TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold,
 	TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right}, Footer)
 
@@ -2542,6 +3675,8 @@ do
 		FLeft.Text = "FPS " .. fps .. "   •   Ping " .. ping .. " ms   •   " .. LocalPlayer.DisplayName
 		FRight.Text = (n > 0 and "● " or "○ ") .. n .. " chức năng đang bật"
 		FRight.TextColor3 = n > 0 and Theme.Accent or Theme.SubText
+		if UX.updateDots then UX.updateDots() end
+		if activeTab == "HOME" and UX.homeRefresh then UX.homeRefresh() end
 	end))
 end
 
@@ -2576,12 +3711,212 @@ do
 	end))
 end
 
+-- =========================================================
+-- GUI+: TÌM KIẾM • THU GỌN MỤC • CHẤM TRẠNG THÁI • KÉO GIÃN CỬA SỔ
+-- =========================================================
+local Grip
+do
+	local function uiScale() return (MainScale and MainScale.Scale) or 1 end
+
+	-- trang kết quả tìm kiếm (ẩn khỏi thanh bên)
+	local pSearch = newTab("SEARCH", "🔍", "Kết quả tìm kiếm")
+	tabBtns.SEARCH.Visible = false
+	UX.rev = {}
+	for n, pg in pairs(pages) do UX.rev[pg] = n end
+
+	-- thu gọn / mở rộng từng mục (nhớ trạng thái)
+	UX.groupOf = {}
+	local allGroups = {}
+	for pname, page in pairs(pages) do
+		if pname ~= "SEARCH" then
+			local kids = {}
+			for _, c in ipairs(page:GetChildren()) do
+				if c:IsA("GuiObject") then kids[#kids + 1] = c end
+			end
+			table.sort(kids, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+			local grp
+			for _, c in ipairs(kids) do
+				local sec = c:GetAttribute("sec")
+				if sec then
+					local g = {items = {}, open = true, key = pname .. "/" .. sec}
+					local arrow = new("TextLabel", {Size = UDim2.new(0, 22, 1, 0), Position = UDim2.new(1, -24, 0, 0),
+						BackgroundColor3 = Theme.Bg, BackgroundTransparency = 0, Text = "▾", TextColor3 = Theme.SubText,
+						Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 3}, c)
+					local btn = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "",
+						ZIndex = 4, AutoButtonColor = false}, c)
+					g.set = function(open, nosave)
+						g.open = open
+						arrow.Text = open and "▾" or "▸"
+						for _, it in ipairs(g.items) do it.Visible = open end
+						if not nosave then
+							Config.collapsed[g.key] = (not open) or nil
+							saveConfig()
+						end
+					end
+					btn.MouseButton1Click:Connect(function() g.set(not g.open) end)
+					btn.MouseEnter:Connect(function() tween(arrow, {TextColor3 = Theme.Text}) end)
+					btn.MouseLeave:Connect(function() tween(arrow, {TextColor3 = Theme.SubText}) end)
+					grp = g
+					allGroups[#allGroups + 1] = g
+				elseif grp then
+					grp.items[#grp.items + 1] = c
+					UX.groupOf[c] = grp
+				end
+			end
+		end
+	end
+	for _, g in ipairs(allGroups) do
+		if Config.collapsed[g.key] then g.set(false, true) end
+	end
+
+	-- ô tìm kiếm trên thanh tiêu đề
+	local box = new("TextBox", {
+		Size = UDim2.new(1, -(222 + 88), 0, 26), Position = UDim2.new(0, 222, 0.5, -13),
+		BackgroundColor3 = Theme.Input, PlaceholderText = "🔍  Tìm chức năng...", PlaceholderColor3 = Theme.SubText,
+		Text = "", TextColor3 = Theme.Text, Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, Header)
+	corner(box, 8)
+	new("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 8)}, box)
+	local bst = stroke(box, Theme.Accent, 1, 1)
+	bindAccent(bst, "Color")
+	box.Focused:Connect(function() tween(bst, {Transparency = 0.2}) end)
+	box.FocusLost:Connect(function() tween(bst, {Transparency = 1}) end)
+	UX.box = box
+
+	function UX.jump(e, tab)
+		UX.jumping = true
+		box.Text = ""
+		UX.jumping = false
+		switchTab(tab)
+		local g = UX.groupOf[e.row]
+		if g and not g.open then g.set(true) end
+		task.delay(0.25, function()
+			local pg, row = pages[tab], e.row
+			if not (pg and row and row.Parent) then return end
+			local y = (row.AbsolutePosition.Y - pg.AbsolutePosition.Y) / uiScale() + pg.CanvasPosition.Y - 6
+			pg.CanvasPosition = Vector2.new(0, math.max(y, 0))
+			tween(row, {BackgroundColor3 = Theme.Item:Lerp(Theme.Accent, 0.45)}, 0.15)
+			task.delay(0.9, function()
+				if row.Parent then tween(row, {BackgroundColor3 = Theme.Item}, 0.3) end
+			end)
+		end)
+	end
+
+	function UX.runSearch(q)
+		for _, c in ipairs(pSearch:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		q = trim(q):lower()
+		local n = 0
+		for _, e in ipairs(UX.reg) do
+			local tab = UX.rev[e.page]
+			if tab and tab ~= "SEARCH" and e.row and e.row.Parent then
+				local tag = UX.tabLabel[tab] or tab
+				if (e.label .. " " .. tag):lower():find(q, 1, true) then
+					n = n + 1
+					if n > 40 then break end
+					local isT = (e.kind == "toggle")
+					local rightW = isT and 54 or 8
+					local row = card(pSearch, 38, n)
+					hover(row, Theme.Item, Theme.ItemHover)
+					local icon = isT and "◉" or (e.kind == "slider" and "≡" or "▶")
+					new("TextLabel", {Size = UDim2.new(1, -(rightW + 16), 0, 18), Position = UDim2.new(0, 12, 0, 4),
+						BackgroundTransparency = 1, Text = icon .. "  " .. e.label, TextColor3 = Theme.Text,
+						Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+						TextTruncate = Enum.TextTruncate.AtEnd}, row)
+					new("TextLabel", {Size = UDim2.new(1, -(rightW + 16), 0, 12), Position = UDim2.new(0, 12, 0, 22),
+						BackgroundTransparency = 1, Text = "trong " .. tag, TextColor3 = Theme.SubText,
+						Font = Enum.Font.Gotham, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, row)
+					local pick = new("TextButton", {Size = UDim2.new(1, -(rightW + 4), 1, 0), BackgroundTransparency = 1,
+						Text = "", AutoButtonColor = false}, row)
+					pick.MouseButton1Click:Connect(function() UX.jump(e, tab) end)
+					if isT then
+						local t = Toggles[e.id]
+						local b = new("TextButton", {Size = UDim2.new(0, 44, 0, 22), Position = UDim2.new(1, -50, 0.5, -11),
+							BackgroundColor3 = State[e.id] and Theme.Accent or Theme.Off, Text = State[e.id] and "BẬT" or "TẮT",
+							TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 10, AutoButtonColor = false}, row)
+						corner(b, 6)
+						b.MouseButton1Click:Connect(function()
+							t.toggle()
+							b.Text = State[e.id] and "BẬT" or "TẮT"
+							tween(b, {BackgroundColor3 = State[e.id] and Theme.Accent or Theme.Off}, 0.15)
+						end)
+					end
+				end
+			end
+		end
+		if n == 0 then emptyLabel(pSearch, "Không có chức năng nào khớp \"" .. q .. "\"") end
+	end
+
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		if UX.jumping then return end
+		local q = trim(box.Text)
+		if q == "" then
+			if activeTab == "SEARCH" then switchTab(UX.prevTab or "HOME") end
+		else
+			if activeTab ~= "SEARCH" then UX.prevTab = activeTab end
+			UX.runSearch(q)
+			if activeTab ~= "SEARCH" then switchTab("SEARCH") end
+		end
+	end)
+
+	-- chấm sáng trên thanh bên: tab nào đang có chức năng bật
+	UX.dotOn = {}
+	function UX.updateDots()
+		local on = {}
+		for id, t in pairs(Toggles) do
+			if not t.opt and State[id] and t.page then
+				local tab = UX.rev[t.page]
+				if tab then on[tab] = true end
+			end
+		end
+		for name, dot in pairs(UX.dots) do
+			local v = on[name] and true or false
+			if UX.dotOn[name] ~= v then
+				UX.dotOn[name] = v
+				tween(dot, {BackgroundTransparency = v and 0 or 1}, 0.2)
+			end
+		end
+	end
+	UX.updateDots()
+
+	-- tay nắm kéo giãn cửa sổ (góc dưới phải)
+	Grip = new("TextButton", {Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(1, -22, 1, -22),
+		BackgroundTransparency = 1, Text = "◢", TextColor3 = Theme.SubText, TextSize = 14,
+		Font = Enum.Font.GothamBold, ZIndex = 60, AutoButtonColor = false}, Main)
+	hover(Grip, Theme.SubText, Theme.Text, "TextColor3")
+	local rs, rStart, w0, h0 = false, nil, W, H
+	Grip.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			rs, rStart, w0, h0 = true, i.Position, W, H
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if rs and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - rStart
+			local sc = uiScale()
+			W = math.clamp(math.floor(w0 + d.X / sc), 520, 1100)
+			H = math.clamp(math.floor(h0 + d.Y / sc), 340, 760)
+			Main.Size = UDim2.new(0, W, 0, H)
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if rs and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
+			rs = false
+			Config.winW, Config.winH = W, H
+			saveConfig()
+		end
+	end))
+end
+
 local minimized = false
 MinBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	Side.Visible = not minimized
 	Content.Visible = not minimized
 	Footer.Visible = not minimized
+	if Grip then Grip.Visible = not minimized end
 	tween(Main, {Size = UDim2.new(0, W, 0, minimized and HEAD or H)}, 0.25)
 end)
 
@@ -2589,7 +3924,6 @@ unload = function()
 	for _, t in pairs(Toggles) do
 		if not t.persist and State[t.id] then pcall(t.set, false) end
 	end
-	pcall(Free.stop)
 	if afkConn then afkConn:Disconnect() afkConn = nil end
 	pcall(Lag.restore)
 	pcall(VF.stop)
@@ -2611,7 +3945,9 @@ CloseBtn.MouseButton1Click:Connect(function() unload() end)
 -- START
 -- =========================================================
 for _, fn in ipairs(pendingInit) do pcall(fn) end
-switchTab("MOVE")
+local startTab = Config.tab
+if type(startTab) ~= "string" or startTab == "SEARCH" or not pages[startTab] then startTab = "HOME" end
+switchTab(startTab)
 tween(Main, {Size = UDim2.new(0, W, 0, H)}, 0.3)
 task.delay(0.4, function() toast("Alien Mango V5 • RightShift = ẩn/hiện GUI") end)
 end
